@@ -8,14 +8,18 @@ cards, a camcorder look, sound design and a jump scare.
 
 ## Two ways to run it
 
-**In the browser, nothing to install:** <https://joshuagrigson.github.io/Vid-Editor/>
+**In the browser, nothing to install:** <https://ghostcut.onrender.com>
 
 The page does all the video work inside your browser with ffmpeg compiled to
-WebAssembly (`index.html` + `app.js`). Clips never leave the computer. It is
-the same pipeline as the desktop version, just slower: budget roughly a
-minute of rendering per 20 seconds of iPhone footage on a laptop, more for 4K
-HDR. Use a laptop or desktop with Chrome, Edge or Safari, keep the tab open
-while it renders, and press *Save the movie* when it finishes.
+WebAssembly (`index.html` + `app.js`). Clips never leave the computer. It
+builds the movie the same way the desktop version does, just slower: budget
+roughly a minute of rendering per 20 seconds of iPhone footage on a laptop,
+more for 4K or HDR. Use a laptop or desktop with Chrome, Edge or Safari, keep
+the tab open while it renders, and press *Save the movie* when it finishes.
+(Render redeploys the site from `main` on every push; the GitHub Pages
+workflow in `.github/workflows` serves the same files at
+<https://joshuagrigson.github.io/Vid-Editor/> once Pages is switched on in
+the repo settings.)
 
 **On your computer, fastest:** clone or download this repo, then double-click
 **Start GhostCut.bat** (Windows) or **Start GhostCut.command** (Mac). The
