@@ -1,0 +1,6 @@
+# GhostCut working files (imported clips, renders)
+workspace/
+
+__pycache__/
+*.py[cod]
+.DS_Store

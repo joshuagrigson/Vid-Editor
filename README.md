@@ -1,0 +1,88 @@
+# GhostCut
+
+Splice a pile of short iPhone clips into one long, polished, *Paranormal
+Activity*-style found-footage horror movie. Made for a kid's home-movie
+project: she shoots the scary bits around the house, sends them over, you drop
+them into GhostCut, press Render, and out comes a movie with titles, night
+cards, a camcorder look, sound design and a jump scare.
+
+## Start it
+
+Clone or download this repo, then double-click **Start GhostCut.bat** (Windows) or **Start GhostCut.command**
+(Mac). The first run installs two helper packages (a bundled ffmpeg and
+Pillow) and takes a minute; after that it opens <http://localhost:4322>.
+
+Needs Python 3.9 or newer. Nothing else to install by hand.
+
+> Mac: if double-clicking the `.command` file complains about permissions,
+> run `chmod +x "Start GhostCut.command"` once in Terminal.
+
+## Use it
+
+1. **Drop the clips in** (or type a folder path such as your Downloads and
+   click *Import folder*). Clips are copied into `workspace/clips`; the
+   originals are never touched. iPhone `.MOV`, `.MP4`, portrait, landscape,
+   4K, 60 fps and HDR/Dolby Vision are all fine; HDR is tone-mapped so it
+   doesn't come out washed out.
+2. **Put them in order** by dragging, or with the arrows. Imports are sorted
+   by the time the phone recorded them.
+3. **Pick the look.** Night Vision, Security Cam, VHS, Cinematic Dark, or
+   Clean. Any single clip can override the movie look.
+4. **Optional per clip:** trim start/end, and tick *Jump scare at* to drop a
+   zoom-shake-strobe hit with a bass stinger at that second. *Preview* renders
+   six seconds of that clip with the current look so you can tune it.
+5. **Fill in the movie:** title, whose residence the footage was "recovered"
+   from, closing text, credits. Choose whether every clip is its own
+   "NIGHT #n" (classic), one long night, or mark nights yourself.
+6. **Render.** Progress shows in the bar; the finished `.mp4` plays right in
+   the page and lands in `workspace/output/`.
+
+## What it does to the footage
+
+- Opening: black, typewriter disclaimer with key clicks, title card with slow
+  fade and flicker, hard cut to black.
+- Night cards ("NIGHT #3 — September 7, 2026") with a fake camcorder clock
+  that advances realistically through the night.
+- Looks: green IR night vision with blinking REC and clock; cold 15 fps
+  security cam with scanlines and CAM 01 overlay; warm VHS with colour bleed,
+  jitter, PLAY/SP overlay; teal-shadow cinematic grade with widescreen bars.
+- Transitions: TV-static bursts with white-noise hits, fade through black, or
+  hard cuts.
+- Sound: every clip gets a subtle compressor so room noise and footsteps come
+  forward, and the whole movie sits on a low synthesized dread drone (volume
+  is a slider). No downloaded audio, everything is generated.
+- Jump scare: audio ducks for 0.8 s, then a sub-bass hit, a rising shriek,
+  a noise burst, and a sudden zoom with shake, negative flashes and grain.
+- Output: 1080p (or 1080×1920 if most clips are portrait), H.264 at up to
+  14 Mb/s, AAC stereo, `faststart` so it streams and AirDrops cleanly.
+
+## Command line
+
+```bash
+python ghostcut.py render ~/Downloads/scary-clips --title "PARANORMAL ACTIVITY" \
+    --family "the Grigson" --style night --scare 3:4.5 \
+    --credits "Directed by Scarlet" "Camera by Scarlet" --out movie.mp4
+```
+
+`--scare 3:4.5` puts the jump scare 4.5 seconds into clip 3. `--style` is one
+of `night`, `seccam`, `vhs`, `cinematic`, `clean`. `--nights` is `per_clip`,
+`single` or `manual`. `--no-clock` and `--no-title` switch those off.
+
+## Where things live
+
+```
+vid-editor/
+├── ghostcut.py             engine + local web server (one file)
+├── ui.html                 the browser UI
+├── Start GhostCut.bat      Windows launcher
+├── Start GhostCut.command  Mac launcher
+└── workspace/              created on first run, ignored by git
+    ├── clips/              your imported footage
+    ├── thumbs/  previews/  what the UI shows
+    ├── build/              per-segment renders + ffmpeg logs (debugging)
+    ├── output/             finished movies
+    └── archive/            old projects after "Start fresh"
+```
+
+If a render fails, the exact ffmpeg command and its error are shown in the
+page and saved in `workspace/build/<segment>.log`.
