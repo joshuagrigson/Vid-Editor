@@ -21,12 +21,21 @@ workflow in `.github/workflows` serves the same files at
 <https://joshuagrigson.github.io/Vid-Editor/> once Pages is switched on in
 the repo settings.)
 
-**On your computer, fastest:** clone or download this repo, then double-click
-**Start GhostCut.bat** (Windows) or **Start GhostCut.command** (Mac). The
-first run installs two helper packages (a bundled ffmpeg and Pillow) and takes
-a minute; after that it opens <http://localhost:4322>. Needs Python 3.9 or
-newer. Renders several times faster than the browser version and keeps your
-project between sessions.
+The browser edition saves your clips and every finished piece of the render in
+the browser's storage, so if the engine stalls (it occasionally deadlocks in
+WebAssembly) the page reloads itself and carries on from the last finished
+piece. Long clips are rendered in one-minute pieces for the same reason. A
+closed tab is also fine: reopen the page and it resumes.
+
+**On your computer, fastest:** download the ZIP
+(<https://github.com/joshuagrigson/Vid-Editor/archive/refs/heads/main.zip>),
+unzip it, then double-click **Start GhostCut.bat** (Windows) or **Start
+GhostCut.command** (Mac). The first run installs two helper packages (a
+bundled ffmpeg and Pillow) and takes a minute; after that it opens
+<http://localhost:4322>. Needs Python 3.9 or newer. Renders several times
+faster than the browser version, never deadlocks, and keeps your project
+between sessions. For a movie with more than ten minutes of footage this is
+the one to use.
 
 > Mac: if double-clicking the `.command` file complains about permissions,
 > run `chmod +x "Start GhostCut.command"` once in Terminal.

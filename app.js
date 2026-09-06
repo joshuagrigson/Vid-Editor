@@ -48,7 +48,7 @@ export class Engine {
     this.queue = Promise.resolve();
     // Thread budget. The wasm core pre-spawns a pool of 32 pthreads and deadlocks if ffmpeg asks for more,
     // and some combinations deadlock well below that, so these are deliberately conservative.
-    this.threads = { dec: 2, filt: 2, enc: 4 };
+    this.threads = { dec: 2, filt: 1, enc: 4 };
   }
 
   static STALL_MS = 60000;
@@ -105,8 +105,11 @@ export class Engine {
     this.onProgressTime = t => { lastTick = Date.now(); if (expected > 0 && onFrac) onFrac(Math.max(0, Math.min(1, t / expected))); };
     // Watchdog: a deadlocked wasm run never errors, it just sits there. Kill it and let the caller retry.
     const timer = setInterval(() => {
-      if (Date.now() - lastTick > Engine.STALL_MS) { stalled = true; clearInterval(timer); try { this.ff?.terminate(); } catch (_) {} }
-    }, 5000);
+      if (Date.now() - lastTick > Engine.STALL_MS || this.forceStallOnce) {
+        this.forceStallOnce = false; stalled = true; clearInterval(timer);
+        try { this.ff?.terminate(); } catch (_) {}
+      }
+    }, 1000);
     // -progress writes newline-terminated key=value lines, which is what reaches the log pipe (stats lines end in \r and don't)
     const t = this.threads;
     const out = args[args.length - 1];
@@ -447,26 +450,39 @@ export function planNights(p, clips) {
 const ENC = ["-c:v", "libx264", "-preset", "superfast", "-crf", "22", "-maxrate", "10M", "-bufsize", "20M", "-pix_fmt", "yuv420p",
   "-r", String(FPS), "-g", String(FPS * 2), "-profile:v", "high", "-level", "4.1", "-c:a", "aac", "-b:a", "160k", "-ar", String(AR), "-ac", "2"];
 
+// Long clips are rendered in pieces this long, so a stall or a closed tab loses minutes, not the clip.
+export const PART_SECONDS = 60;
+
+export function clipParts(duration) {
+  const n = Math.max(1, Math.round(duration / PART_SECONDS));
+  const len = duration / n;
+  return Array.from({ length: n }, (_, i) => ({ i, start: i * len, dur: i === n - 1 ? duration - i * len : len, first: i === 0, last: i === n - 1 }));
+}
+
 export class Renderer {
-  constructor(eng, proj, clips, progress = () => {}) {
+  constructor(eng, proj, clips, progress = () => {}, { resume = null, onSegment = null, onStall = null } = {}) {
     this.eng = eng; this.p = proj; this.clips = clips; this.progress = progress;
     [this.W, this.H] = chooseCanvas(proj, clips);
     this.segments = []; // {name, blob, duration}
     this.totalWork = 1; this.doneWork = 0;
+    this.resume = resume;        // Map(name -> {blob, duration}) of segments finished before a restart
+    this.onSegment = onSegment;  // called with each finished segment so the page can persist it
+    this.onStall = onStall;      // called when the engine deadlocks; expected to persist state and reload the page
   }
   job(weight, msg) { return frac => this.progress(Math.min(0.999, (this.doneWork + weight * frac) / this.totalWork), msg); }
   finish(w) { this.doneWork += w; }
 
-  // Run one segment; if the engine deadlocks, restart it with the most conservative thread budget and redo the segment.
-  async step(label, fn) {
-    try { return await fn(); }
+  // One segment: reuse it if a previous attempt already finished it, otherwise render it and hand it to onSegment.
+  async seg(name, weight, fn) {
+    const cached = this.resume?.get(name + ".mp4");
+    if (cached) { this.segments.push({ name: name + ".mp4", blob: cached.blob, duration: cached.duration }); this.finish(weight); return; }
+    try { await fn(); }
     catch (e) {
-      if (!e.stalled) throw e;
-      this.progress(this.doneWork / this.totalWork, `Engine stalled on ${label}. Restarting with fewer threads…`);
-      this.eng.threads = { dec: 1, filt: 1, enc: 2 };
-      await this.eng.load();
-      return await fn();
+      if (e.stalled && this.onStall) { await this.onStall(e); }
+      throw e;
     }
+    const s = this.segments[this.segments.length - 1];
+    if (s && this.onSegment) await this.onSegment(s);
   }
 
   async writePngs(dir, prefix, frames) {
@@ -512,16 +528,17 @@ export class Renderer {
     await this.push(name, duration);
   }
 
-  async renderClip(idx, clip, plan, preview = false) {
+  async renderClip(idx, clip, plan, part, preview = false) {
     const eng = this.eng, p = this.p, W = this.W, H = this.H;
     let style = clip.effect && clip.effect !== "style" ? clip.effect : p.style;
     const meta = clip.meta;
-    let D = plan.duration; if (preview) D = Math.min(D, 6);
-    const name = preview ? "preview" : `clip${String(idx).padStart(2, "0")}`;
+    let D = part.dur; if (preview) D = Math.min(D, 6);
+    const name = preview ? "preview" : `clip${String(idx).padStart(2, "0")}_${String(part.i).padStart(2, "0")}`;
     const safe = safeName(clip.file.name);
+    const clock = new Date(plan.clock.getTime() + part.start * 1000);
     await eng.mountFiles([new File([clip.file], safe)], "/in");
     try {
-      const inputs = ["-ss", f3(plan.start), "-i", `/in/${safe}`];
+      const inputs = ["-ss", f3(plan.start + part.start), "-i", `/in/${safe}`];
       let nIn = 1;
       const graph = [];
       let pre = `[0:v]fps=${FPS},`;
@@ -530,9 +547,15 @@ export class Renderer {
       let cur = "[base]";
       graph.push(`${cur}${styleVideoChain(eng, style, W, H)}[fx]`); cur = "[fx]";
 
+      // jump scare time is relative to the trimmed clip; keep it only if it lands inside this part
       let T = clip.scare_at == null || clip.scare_at === "" ? null : +clip.scare_at;
       if (T != null && isNaN(T)) T = null;
-      if (T != null && !(T >= 0.3 && T <= D - 0.4)) T = D < 1.5 ? null : Math.max(0.3, Math.min(D - 0.4, T));
+      if (T != null) {
+        const clipLen = plan.duration;
+        T = Math.max(0.3, Math.min(clipLen - 0.4, T)) - part.start;
+        if (T < 0 || T > D) T = null;
+        else if (!(T >= 0.3 && T <= D - 0.4)) T = D < 1.5 ? null : Math.max(0.3, Math.min(D - 0.4, T));
+      }
       if (T != null) { graph.push(`${cur}${jumpScareVideo(T, W, H)}[sc]`); cur = "[sc]"; }
 
       if (STYLES[style]?.scanlines) {
@@ -543,13 +566,15 @@ export class Renderer {
       if (p.timestamps && STYLES[style]?.clock) {
         const secs = Math.ceil(D) + 2;
         this.progress(this.doneWork / this.totalWork, `Clip ${idx + 1}: drawing the clock…`);
-        await this.writePngs("/ts", "ts_", await makeTimestampFrames(W, H, style, plan.night, plan.clock, secs));
+        await this.writePngs("/ts", "ts_", await makeTimestampFrames(W, H, style, plan.night, clock, secs));
         inputs.push("-framerate", "1", "-threads", "1", "-i", "/ts/ts_%04d.png");
         graph.push(`${cur}[${nIn}:v]overlay=0:0:format=yuv420[ts]`); cur = "[ts]"; nIn++;
       }
       const fade = p.transition === "black" ? 0.5 : 0;
+      const fadeIn = fade && (part.first || preview), fadeOut = fade && (part.last || preview);
       let tail = "";
-      if (fade) tail += `fade=t=in:st=0:d=${fade},fade=t=out:st=${f3(D - fade)}:d=${fade},`;
+      if (fadeIn) tail += `fade=t=in:st=0:d=${fade},`;
+      if (fadeOut) tail += `fade=t=out:st=${f3(D - fade)}:d=${fade},`;
       if (preview) tail += "scale=iw/2:-2,";
       tail += `format=yuv420p,tpad=stop_mode=clone:stop_duration=2,trim=duration=${f3(D)},setpts=PTS-STARTPTS[vout]`;
       graph.push(cur + tail);
@@ -561,7 +586,8 @@ export class Renderer {
         a += `,volume=0.12:enable='between(t,${f3(Math.max(0, T - 0.8))},${f3(T - 0.02)})'[a1];` + jumpScareAudioSource(T, "[sting]") + ";" +
              "[a1][sting]amix=inputs=2:duration=first:normalize=0,alimiter=limit=0.97";
       }
-      if (fade) a += `,afade=t=in:st=0:d=${fade},afade=t=out:st=${f3(D - fade)}:d=${fade}`;
+      if (fadeIn) a += `,afade=t=in:st=0:d=${fade}`;
+      if (fadeOut) a += `,afade=t=out:st=${f3(D - fade)}:d=${fade}`;
       a += `,apad=whole_dur=${f3(D + 2)},atrim=duration=${f3(D)},asetpts=PTS-STARTPTS[aout]`;
       graph.push(a);
 
@@ -569,8 +595,9 @@ export class Renderer {
       const enc = [...ENC];
       if (preview) { enc[enc.indexOf("-preset") + 1] = "ultrafast"; enc[enc.indexOf("-crf") + 1] = "26"; }
       const weight = D * (meta.hdr ? 3 : 1);
+      const partLabel = clipParts(plan.duration).length > 1 ? ` (part ${part.i + 1} of ${clipParts(plan.duration).length})` : "";
       await eng.exec([...inputs, "-filter_complex_script", "graph.txt", "-map", "[vout]", "-map", "[aout]", ...enc, "-movflags", "+faststart", name + ".mp4"],
-        D, this.job(weight, `Clip ${idx + 1}: ${clip.name}`), `clip ${idx + 1} (${clip.name})`);
+        D, this.job(weight, `Clip ${idx + 1}: ${clip.name}${partLabel}`), `clip ${idx + 1} (${clip.name})${partLabel}`);
       this.finish(weight);
       for (const f of ["graph.txt", "scan.png"]) try { await eng.ff.deleteFile(f); } catch (_) {}
       await eng.rmDir("/ts");
@@ -619,32 +646,38 @@ export class Renderer {
     if (!this.clips.length) throw new Error("Add at least one clip first.");
     const plan = planNights(p, this.clips);
     this.totalWork = this.estimateWork(plan); this.segments = [];
-    const S = (label, fn) => this.step(label, fn);
+    const S = (name, weight, fn) => this.seg(name, weight, fn);
     if (p.title_card) {
-      await S("black", () => this.renderBlack("black_open", 1.2));
-      await S("opening text", () => this.renderTypewriter("intro", introTextFor(p)));
-      await S("title card", async () => this.renderCard("title", await makeCard(this.W, this.H, { title: p.title || "UNTITLED", subtitle: p.subtitle || "", titleScale: (p.title || "").length < 22 ? 0.085 : 0.06 }), 4.0, 1.6, 0.3, "Title card"));
-      await S("black", () => this.renderBlack("black_after_title", 0.8));
+      await S("black_open", 0, () => this.renderBlack("black_open", 1.2));
+      await S("intro", 2.5, () => this.renderTypewriter("intro", introTextFor(p)));
+      await S("title", 1, async () => this.renderCard("title", await makeCard(this.W, this.H, { title: p.title || "UNTITLED", subtitle: p.subtitle || "", titleScale: (p.title || "").length < 22 ? 0.085 : 0.06 }), 4.0, 1.6, 0.3, "Title card"));
+      await S("black_after_title", 0, () => this.renderBlack("black_after_title", 0.8));
     }
     for (let i = 0; i < this.clips.length; i++) {
       const pl = plan[i];
       if (p.night_cards && pl.new_night) {
-        const d = pl.clock;
-        await S(`night ${pl.night} card`, async () => this.renderCard(`night${String(pl.night).padStart(2, "0")}`, await makeCard(this.W, this.H, { title: `Night #${pl.night}`, subtitle: `${MONTHS[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()}`, titleScale: 0.06 }), 2.6, 0.8, 0.7, `Night #${pl.night} card`));
+        const d = pl.clock, nm = `night${String(pl.night).padStart(2, "0")}`;
+        await S(nm, 0.65, async () => this.renderCard(nm, await makeCard(this.W, this.H, { title: `Night #${pl.night}`, subtitle: `${MONTHS[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()}`, titleScale: 0.06 }), 2.6, 0.8, 0.7, `Night #${pl.night} card`));
       } else if (i > 0 && p.transition === "static") {
-        await S("static burst", () => this.renderStatic(`static${String(i).padStart(2, "0")}`, 0.18 + 0.02 * (i % 3)));
+        const nm = `static${String(i).padStart(2, "0")}`;
+        await S(nm, 0, () => this.renderStatic(nm, 0.18 + 0.02 * (i % 3)));
       }
-      await S(`clip ${i + 1}`, () => this.renderClip(i, this.clips[i], pl));
-      if (i === this.clips.length - 1 && p.transition === "static" && (p.end_card || (p.outro_text || "").trim())) await S("static burst", () => this.renderStatic("static_end", 0.25));
+      for (const part of clipParts(pl.duration)) {
+        const nm = `clip${String(i).padStart(2, "0")}_${String(part.i).padStart(2, "0")}`;
+        await S(nm, part.dur * (this.clips[i].meta.hdr ? 3 : 1), () => this.renderClip(i, this.clips[i], pl, part));
+      }
+      if (i === this.clips.length - 1 && p.transition === "static" && (p.end_card || (p.outro_text || "").trim())) await S("static_end", 0, () => this.renderStatic("static_end", 0.25));
     }
     if (p.end_card) {
-      await S("black", () => this.renderBlack("black_end", 1.0));
-      if ((p.outro_text || "").trim()) await S("closing text", async () => this.renderCard("outro", await makeCard(this.W, this.H, { body: p.outro_text.trim() }), 4.5, 1.0, 1.0, "Closing text"));
+      await S("black_end", 0, () => this.renderBlack("black_end", 1.0));
+      if ((p.outro_text || "").trim()) await S("outro", 1.1, async () => this.renderCard("outro", await makeCard(this.W, this.H, { body: p.outro_text.trim() }), 4.5, 1.0, 1.0, "Closing text"));
       const credits = (p.credits || "").split("\n").map(s => s.trim()).filter(Boolean);
-      if (credits.length) await S("credits", async () => this.renderCard("credits", await makeCard(this.W, this.H, { title: p.title || "", body: credits.join("\n"), titleScale: 0.045 }), 5.0, 1.0, 1.5, "Credits"));
-      await S("black", () => this.renderBlack("black_final", 1.0));
+      if (credits.length) await S("credits", 1.25, async () => this.renderCard("credits", await makeCard(this.W, this.H, { title: p.title || "", body: credits.join("\n"), titleScale: 0.045 }), 5.0, 1.0, 1.5, "Credits"));
+      await S("black_final", 0, () => this.renderBlack("black_final", 1.0));
     }
-    const blob = await S("final assembly", () => this.renderFinal("movie.mp4"));
+    let blob;
+    try { blob = await this.renderFinal("movie.mp4"); }
+    catch (e) { if (e.stalled && this.onStall) await this.onStall(e); throw e; }
     this.segments = [];
     this.progress(1, "Done");
     return blob;
@@ -653,6 +686,11 @@ export class Renderer {
   async preview(idx) {
     const plan = planNights(this.p, this.clips)[idx];
     this.totalWork = Math.min(plan.duration, 6) + 0.1;
-    return this.step("preview", () => this.renderClip(idx, this.clips[idx], plan, true));
+    // preview the stretch around the jump scare if there is one, otherwise the start
+    let start = 0;
+    const T = +this.clips[idx].scare_at;
+    if (this.clips[idx].scare_at != null && this.clips[idx].scare_at !== "" && !isNaN(T)) start = Math.max(0, Math.min(plan.duration - 6, T - 2.5));
+    const part = { i: 0, start, dur: Math.min(6, plan.duration - start), first: true, last: true };
+    return this.renderClip(idx, this.clips[idx], plan, part, true);
   }
 }

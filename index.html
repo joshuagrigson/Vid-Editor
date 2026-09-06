@@ -196,11 +196,45 @@ const fmt = s => { s = Math.round(s); return Math.floor(s / 60) + ":" + String(s
 const esc = s => String(s).replace(/[&<>"]/g, m => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[m]));
 const engine = new Engine();
 let state = Object.assign(defaultProject(), load());
-let clips = [];        // {id, file, name, meta, thumb, start, end, effect, scare_at, new_night, pending}
-let busy = false;
+let clips = [];        // {id, file, name, meta, thumb, thumbBlob, start, end, effect, scare_at, new_night, pending}
+let busy = false, reloading = false;
 
 function load() { try { return JSON.parse(localStorage.getItem("ghostcut.settings") || "{}"); } catch (_) { return {}; } }
 function save() { try { localStorage.setItem("ghostcut.settings", JSON.stringify(state)); } catch (_) {} }
+
+// ---------- persistence (IndexedDB): clips, and finished segments of a render in progress ----------
+// A render can take an hour. If the engine stalls or the tab is reloaded, everything finished so far survives.
+const DB = (() => {
+  let dbp = null;
+  const open = () => dbp ||= new Promise((res, rej) => {
+    const r = indexedDB.open("ghostcut", 1);
+    r.onupgradeneeded = () => { r.result.createObjectStore("kv"); r.result.createObjectStore("seg"); };
+    r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
+  });
+  const tx = async (store, mode, fn) => {
+    const d = await open();
+    return new Promise((res, rej) => {
+      const t = d.transaction(store, mode); const req = fn(t.objectStore(store));
+      t.oncomplete = () => res(req?.result); t.onerror = () => rej(t.error); t.onabort = () => rej(t.error);
+    });
+  };
+  const safe = p => p.catch(e => { console.warn("storage:", e); return undefined; });
+  return {
+    get: (s, k) => safe(tx(s, "readonly", o => o.get(k))),
+    set: (s, k, v) => safe(tx(s, "readwrite", o => o.put(v, k))),
+    clear: s => safe(tx(s, "readwrite", o => o.clear())),
+    all: s => safe(tx(s, "readonly", o => o.getAll())),
+  };
+})();
+let saveClipsTimer = null;
+function saveClips() {
+  clearTimeout(saveClipsTimer);
+  saveClipsTimer = setTimeout(() => {
+    const rows = clips.filter(c => !c.pending).map(c => ({ id: c.id, file: c.file, name: c.name, meta: c.meta, thumbBlob: c.thumbBlob || null,
+      start: c.start, end: c.end, effect: c.effect, scare_at: c.scare_at, new_night: c.new_night }));
+    DB.set("kv", "clips", rows);
+  }, 300);
+}
 function setMsg(t) { $("#msg").textContent = t || ""; }
 function showErr(e) { const b = $("#err"); b.style.display = "block"; b.textContent = (e && e.message) || String(e); console.error(e); }
 function clearErr() { $("#err").style.display = "none"; }
@@ -291,7 +325,7 @@ function renderClips() {
       e.preventDefault(); d.classList.remove("dropTarget");
       const from = e.dataTransfer.getData("text/plain"); if (!from || from === c.id) return;
       const fi = clips.findIndex(x => x.id === from), ti = clips.findIndex(x => x.id === c.id);
-      const [moved] = clips.splice(fi, 1); clips.splice(ti, 0, moved); renderClips();
+      const [moved] = clips.splice(fi, 1); clips.splice(ti, 0, moved); renderClips(); saveClips();
     });
     box.appendChild(d);
   });
@@ -305,11 +339,11 @@ function updateClip(c, d) {
   c.effect = d.querySelector("[data-ck=effect]").value;
   c.scare_at = on ? at : null;
   const nn = d.querySelector("[data-ck=new_night]"); if (nn) c.new_night = nn.checked;
-  renderClips();
+  renderClips(); saveClips();
 }
 async function clipAction(act, c, i) {
-  if (act === "del") { if (!confirm(`Remove ${c.name} from the movie?`)) return; if (c.thumb) URL.revokeObjectURL(c.thumb); clips.splice(i, 1); renderClips(); }
-  else if (act === "up" || act === "down") { const j = act === "up" ? i - 1 : i + 1; [clips[i], clips[j]] = [clips[j], clips[i]]; renderClips(); }
+  if (act === "del") { if (!confirm(`Remove ${c.name} from the movie?`)) return; if (c.thumb) URL.revokeObjectURL(c.thumb); clips.splice(i, 1); renderClips(); saveClips(); }
+  else if (act === "up" || act === "down") { const j = act === "up" ? i - 1 : i + 1; [clips[i], clips[j]] = [clips[j], clips[i]]; renderClips(); saveClips(); }
   else if (act === "preview") await runJob(async progress => {
     const ready = clips.filter(x => !x.pending);
     const blob = await new Renderer(engine, state, ready, progress).preview(ready.indexOf(c));
@@ -340,7 +374,7 @@ async function addFiles(files) {
     try {
       c.meta = await engine.probe(c.file);
       c.pending = "making thumbnail…"; renderClips();
-      try { c.thumb = URL.createObjectURL(await engine.thumbnail(c.file, Math.min(1, c.meta.duration / 2))); } catch (_) { c.thumb = ""; }
+      try { c.thumbBlob = await engine.thumbnail(c.file, Math.min(1, c.meta.duration / 2)); c.thumb = URL.createObjectURL(c.thumbBlob); } catch (_) { c.thumb = ""; }
       c.pending = null;
     } catch (e) {
       clips.splice(clips.indexOf(c), 1);
@@ -352,7 +386,7 @@ async function addFiles(files) {
   const ready = clips.filter(x => !x.pending);
   ready.sort((a, b) => (a.meta.created || "9999").localeCompare(b.meta.created || "9999") || a.name.localeCompare(b.name));
   clips = [...ready, ...clips.filter(x => x.pending)];
-  renderClips();
+  renderClips(); saveClips();
 }
 
 // ---------- engine + jobs ----------
@@ -378,30 +412,80 @@ async function runJob(fn) {
     engineReady().catch(() => {});
   } finally { busy = false; renderClips(); }
 }
-$("#render").addEventListener("click", () => runJob(async progress => {
-  $("#result").style.display = "none";
-  const ready = clips.filter(x => !x.pending);
-  const blob = await new Renderer(engine, state, ready, progress).run();
-  const name = ((state.output_name || state.title || "ghostcut").replace(/[^A-Za-z0-9 ._-]+/g, "").trim() || "ghostcut") + ".mp4";
-  if ($("#player").src) URL.revokeObjectURL($("#player").src);
-  const url = URL.createObjectURL(blob);
-  $("#player").src = url; $("#dl").href = url; $("#dl").download = name;
-  $("#outInfo").textContent = `${name} · ${(blob.size / 1048576).toFixed(0)} MB`;
-  $("#result").style.display = "block"; $("#player").scrollIntoView({ behavior: "smooth", block: "center" });
-}));
+// A render is a record in storage while it runs; each finished segment is stored as it lands. If the
+// engine deadlocks, we store the fact, reload the page, and boot() resumes from the stored segments.
+async function startRender({ resumeMap = null, record = null } = {}) {
+  await runJob(async progress => {
+    $("#result").style.display = "none";
+    const ready = clips.filter(x => !x.pending);
+    const rec = record || { active: true, settings: JSON.parse(JSON.stringify(state)), clipIds: ready.map(c => c.id), threads: engine.threads, stalls: 0, startedAt: Date.now() };
+    if (!record) { await DB.clear("seg"); await DB.set("kv", "render", rec); }
+    const r = new Renderer(engine, state, ready, progress, {
+      resume: resumeMap,
+      onSegment: s => DB.set("seg", s.name, { name: s.name, blob: s.blob, duration: s.duration }),
+      onStall: async () => {
+        rec.stalls = (rec.stalls || 0) + 1;
+        rec.threads = { dec: 1, filt: 1, enc: 2 };
+        if (rec.stalls >= 4) {
+          rec.active = false; await DB.set("kv", "render", rec);
+          throw new Error("The video engine stalled four times on this movie. Your clips are kept; try the desktop version for this one (see the README), or reload and press Render to try again.");
+        }
+        await DB.set("kv", "render", rec);
+        setMsg(`Engine stalled. Reloading to pick up where it left off (restart ${rec.stalls})…`);
+        reloading = true; location.reload();
+        await new Promise(() => {}); // the page is going away
+      },
+    });
+    const blob = await r.run();
+    rec.active = false; await DB.set("kv", "render", rec); await DB.clear("seg");
+    const name = ((state.output_name || state.title || "ghostcut").replace(/[^A-Za-z0-9 ._-]+/g, "").trim() || "ghostcut") + ".mp4";
+    if ($("#player").src) URL.revokeObjectURL($("#player").src);
+    const url = URL.createObjectURL(blob);
+    $("#player").src = url; $("#dl").href = url; $("#dl").download = name;
+    $("#outInfo").textContent = `${name} · ${(blob.size / 1048576).toFixed(0)} MB`;
+    $("#result").style.display = "block"; $("#player").scrollIntoView({ behavior: "smooth", block: "center" });
+  });
+}
+$("#render").addEventListener("click", () => startRender());
 $("#pvClose").addEventListener("click", () => { $("#modal").classList.remove("on"); $("#pv").pause(); if ($("#pv").src) URL.revokeObjectURL($("#pv").src); $("#pv").removeAttribute("src"); $("#pv").load(); });
 $("#modal").addEventListener("click", e => { if (e.target === e.currentTarget) $("#pvClose").click(); });
-$("#reset").addEventListener("click", () => {
+$("#reset").addEventListener("click", async () => {
   if (!confirm("Start fresh? This clears the clip list and resets the settings.")) return;
   clips.forEach(c => c.thumb && URL.revokeObjectURL(c.thumb)); clips = [];
   state = defaultProject(); save(); fillSettings(); renderClips(); clearErr(); $("#result").style.display = "none";
+  await DB.clear("kv"); await DB.clear("seg");
 });
-window.addEventListener("beforeunload", e => { if (busy) { e.preventDefault(); e.returnValue = ""; } });
+window.addEventListener("beforeunload", e => { if (busy && !reloading) { e.preventDefault(); e.returnValue = ""; } });
 
-buildLooks(); bindSettings(); fillSettings(); renderClips();
-engineReady().catch(() => {});
+async function boot() {
+  buildLooks(); bindSettings(); fillSettings(); renderClips();
+  try {
+    const saved = await DB.get("kv", "clips");
+    if (saved?.length) {
+      clips = saved.map(c => ({ ...c, thumb: c.thumbBlob ? URL.createObjectURL(c.thumbBlob) : "", pending: null }));
+      renderClips();
+    }
+    const rec = await DB.get("kv", "render");
+    if (rec?.active && clips.length) {
+      const byId = new Map(clips.map(c => [c.id, c]));
+      const ordered = (rec.clipIds || []).map(id => byId.get(id)).filter(Boolean);
+      if (ordered.length && ordered.length === rec.clipIds.length) {
+        clips = ordered; state = Object.assign(defaultProject(), rec.settings || {}); save(); fillSettings(); renderClips();
+        const segs = (await DB.all("seg")) || [];
+        setMsg(`Resuming your render after an engine restart (${segs.length} segment${segs.length === 1 ? "" : "s"} already done)…`);
+        await engineReady();
+        if (rec.threads) engine.threads = rec.threads;
+        startRender({ resumeMap: new Map(segs.map(s => [s.name, s])), record: rec });
+        return;
+      }
+      rec.active = false; await DB.set("kv", "render", rec);
+    }
+  } catch (e) { console.warn("restore failed", e); }
+  engineReady().catch(() => {});
+}
+boot();
 // exposed for tests
-window.__ghostcut = { engine, get clips() { return clips; }, get state() { return state; }, set state(s) { state = s; save(); fillSettings(); renderClips(); } };
+window.__ghostcut = { engine, DB, get clips() { return clips; }, get state() { return state; }, set state(s) { state = s; save(); fillSettings(); renderClips(); } };
 </script>
 </body>
 </html>
