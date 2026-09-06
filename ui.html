@@ -160,7 +160,7 @@
         <button id="import">Import folder</button>
       </div>
       <div class="hint">Tip: AirDrop or text the clips to this computer, then drop them in above. Clips are copied into
-        <code>ghostcut/workspace/clips</code>, so the originals are never touched.</div>
+        <code>workspace/clips</code> next to GhostCut, so the originals are never touched.</div>
       <div class="uploads" id="uploads"></div>
       <div id="clips"></div>
     </div>
@@ -393,7 +393,7 @@
   $('#modal').addEventListener('click', e => { if (e.target === e.currentTarget) $('#pvClose').click(); });
   $('#openOut').addEventListener('click', () => api('/api/open_output', {}).catch(showErr));
   $('#reset').addEventListener('click', async () => {
-    if (!confirm('Start a fresh project? The current clips and settings are moved to ghostcut/workspace/archive (nothing is deleted).')) return;
+    if (!confirm('Start a fresh project? The current clips and settings are moved to workspace/archive (nothing is deleted).')) return;
     try { state = await api('/api/reset', {}); fillSettings(); renderClips(); clearErr(); $('#result').style.display = 'none'; } catch (e) { showErr(e); }
   });
 

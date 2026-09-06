@@ -6,7 +6,7 @@ Double-click "Start GhostCut" (or run `python ghostcut.py`) and it:
   2. opens http://localhost:4322 in your browser,
   3. lets you drop in the clips, put them in order, pick a look, add a
      jump scare, and press Render,
-  4. writes one polished .mp4 into ghostcut/workspace/output/.
+  4. writes one polished .mp4 into workspace/output/ (next to this file).
 
 Command-line use (no browser):
   python ghostcut.py render /path/to/folder-of-clips --title "PARANORMAL ACTIVITY"
