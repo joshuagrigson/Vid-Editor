@@ -6,13 +6,23 @@ project: she shoots the scary bits around the house, sends them over, you drop
 them into GhostCut, press Render, and out comes a movie with titles, night
 cards, a camcorder look, sound design and a jump scare.
 
-## Start it
+## Two ways to run it
 
-Clone or download this repo, then double-click **Start GhostCut.bat** (Windows) or **Start GhostCut.command**
-(Mac). The first run installs two helper packages (a bundled ffmpeg and
-Pillow) and takes a minute; after that it opens <http://localhost:4322>.
+**In the browser, nothing to install:** <https://joshuagrigson.github.io/Vid-Editor/>
 
-Needs Python 3.9 or newer. Nothing else to install by hand.
+The page does all the video work inside your browser with ffmpeg compiled to
+WebAssembly (`index.html` + `app.js`). Clips never leave the computer. It is
+the same pipeline as the desktop version, just slower: budget roughly a
+minute of rendering per 20 seconds of iPhone footage on a laptop, more for 4K
+HDR. Use a laptop or desktop with Chrome, Edge or Safari, keep the tab open
+while it renders, and press *Save the movie* when it finishes.
+
+**On your computer, fastest:** clone or download this repo, then double-click
+**Start GhostCut.bat** (Windows) or **Start GhostCut.command** (Mac). The
+first run installs two helper packages (a bundled ffmpeg and Pillow) and takes
+a minute; after that it opens <http://localhost:4322>. Needs Python 3.9 or
+newer. Renders several times faster than the browser version and keeps your
+project between sessions.
 
 > Mac: if double-clicking the `.command` file complains about permissions,
 > run `chmod +x "Start GhostCut.command"` once in Terminal.
@@ -72,7 +82,10 @@ of `night`, `seccam`, `vhs`, `cinematic`, `clean`. `--nights` is `per_clip`,
 
 ```
 vid-editor/
-├── ghostcut.py             engine + local web server (one file)
+├── index.html + app.js     browser edition (ffmpeg.wasm), deployed to GitHub Pages
+├── core/ vendor/           ffmpeg.wasm multi-core build and the @ffmpeg client, vendored
+├── coi-serviceworker.min.js  gives the page cross-origin isolation so the multi-core engine can run
+├── ghostcut.py             desktop edition: engine + local web server (one file)
 ├── ui.html                 the browser UI
 ├── Start GhostCut.bat      Windows launcher
 ├── Start GhostCut.command  Mac launcher

@@ -1,0 +1,407 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GhostCut</title>
+<meta name="description" content="Splice short phone clips into one found-footage horror movie, right in your browser. Nothing is uploaded.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%230b0b0d'/%3E%3Ccircle cx='16' cy='16' r='7' fill='%23c8102e'/%3E%3C/svg%3E">
+<!-- Gives the page cross-origin isolation on hosts that can't set headers, so the multi-core engine can run. -->
+<script src="coi-serviceworker.min.js"></script>
+<style>
+  :root {
+    --bg: #0b0b0d; --panel: #14141a; --panel2: #1b1b23; --line: #2a2a35;
+    --text: #e8e6e3; --muted: #9a97a3; --accent: #c8102e; --accent2: #ff3b52; --ok: #3ddc84;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.45 var(--sans); }
+  a { color: var(--accent2); }
+  header { display: flex; align-items: center; gap: 18px; padding: 16px 24px; border-bottom: 1px solid var(--line);
+           background: linear-gradient(180deg, #101014, var(--bg)); position: sticky; top: 0; z-index: 5; flex-wrap: wrap; }
+  header h1 { margin: 0; font-size: 22px; letter-spacing: .28em; font-weight: 600; }
+  header h1 span { color: var(--accent2); }
+  header .tag { color: var(--muted); font-size: 13px; }
+  header .spacer { flex: 1; }
+  header .engine { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+  header .engine b { color: var(--ok); font-weight: 500; }
+  header .engine.bad b { color: var(--accent2); }
+  button { font: inherit; color: var(--text); background: var(--panel2); border: 1px solid var(--line);
+           border-radius: 8px; padding: 8px 14px; cursor: pointer; }
+  button:hover { border-color: #3d3d4d; background: #22222c; }
+  button.primary { background: var(--accent); border-color: var(--accent); font-weight: 600; letter-spacing: .04em; }
+  button.primary:hover { background: #e01535; }
+  button.ghost { background: transparent; }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  main { display: grid; grid-template-columns: 360px 1fr; gap: 20px; padding: 20px 24px 150px; max-width: 1500px; margin: 0 auto; }
+  @media (max-width: 980px) { main { grid-template-columns: 1fr; } }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px; }
+  .panel h2 { margin: 0 0 12px; font-size: 13px; letter-spacing: .18em; text-transform: uppercase; color: var(--muted); }
+  label.f { display: block; margin: 10px 0; font-size: 13px; color: var(--muted); }
+  label.f input[type=text], label.f textarea, label.f select, .clip input[type=number], .clip select {
+    display: block; width: 100%; margin-top: 4px; padding: 8px 10px; color: var(--text); background: #0f0f14;
+    border: 1px solid var(--line); border-radius: 8px; font: inherit; }
+  label.f textarea { min-height: 70px; resize: vertical; }
+  .check { display: flex; align-items: center; gap: 8px; margin: 8px 0; font-size: 14px; color: var(--text); }
+  .check input { width: 16px; height: 16px; accent-color: var(--accent); }
+  .looks { display: grid; gap: 8px; margin-top: 6px; }
+  .look { display: block; border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; cursor: pointer; background: #0f0f14; }
+  .look:hover { border-color: #3d3d4d; }
+  .look.on { border-color: var(--accent2); box-shadow: 0 0 0 1px var(--accent2) inset; }
+  .look b { display: block; font-size: 14px; }
+  .look small { color: var(--muted); }
+  .look input { display: none; }
+  .range { display: flex; align-items: center; gap: 10px; }
+  .range input { flex: 1; accent-color: var(--accent); }
+  .drop { border: 2px dashed #3a3a4a; border-radius: 12px; padding: 26px; text-align: center; color: var(--muted);
+          cursor: pointer; transition: .15s; background: #0f0f14; }
+  .drop.over, .drop:hover { border-color: var(--accent2); color: var(--text); }
+  .drop b { color: var(--text); font-size: 17px; display: block; margin-bottom: 4px; }
+  .hint { color: var(--muted); font-size: 12px; margin-top: 8px; }
+  code { font-family: var(--mono); font-size: 12px; background: #0f0f14; padding: 1px 5px; border-radius: 4px; }
+  #clips { display: grid; gap: 10px; margin-top: 14px; }
+  .clip { display: grid; grid-template-columns: 150px 1fr auto; gap: 14px; padding: 12px; border: 1px solid var(--line);
+          border-radius: 12px; background: var(--panel2); cursor: grab; }
+  .clip.dragging { opacity: .4; }
+  .clip.dropTarget { border-color: var(--accent2); }
+  .clip img { width: 150px; height: 84px; object-fit: cover; border-radius: 8px; background: #000; display: block; }
+  .clip .thumbwrap { position: relative; }
+  .clip .num, .clip .dur { position: absolute; background: rgba(0,0,0,.75); padding: 1px 7px; border-radius: 6px; font-family: var(--mono); font-size: 12px; }
+  .clip .num { top: 6px; left: 6px; } .clip .dur { bottom: 6px; right: 6px; }
+  .clip .name { font-weight: 600; word-break: break-all; }
+  .clip .meta { color: var(--muted); font-size: 12px; font-family: var(--mono); margin-top: 2px; }
+  .clip .meta .hdr { color: #f5c542; }
+  .clip .ctl { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 8px; margin-top: 10px; align-items: end; }
+  .clip .ctl label { font-size: 11px; color: var(--muted); letter-spacing: .04em; text-transform: uppercase; }
+  .clip .ctl input, .clip .ctl select { margin-top: 3px; padding: 6px 8px; font-size: 13px; }
+  .clip .side { display: flex; flex-direction: column; gap: 6px; }
+  .clip .side button { padding: 6px 10px; font-size: 13px; }
+  .clip .side .del:hover { border-color: var(--accent2); color: var(--accent2); }
+  .clip .scare { display: flex; gap: 6px; align-items: center; }
+  .clip .scare input[type=number] { width: 70px; }
+  .clip.pending { opacity: .6; }
+  .empty { color: var(--muted); text-align: center; padding: 30px 0; }
+  footer { position: fixed; left: 0; right: 0; bottom: 0; background: rgba(12,12,16,.96); border-top: 1px solid var(--line);
+           padding: 12px 24px; backdrop-filter: blur(6px); z-index: 6; }
+  footer .inner { max-width: 1500px; margin: 0 auto; display: grid; grid-template-columns: 1fr auto; gap: 16px; align-items: center; }
+  .prog { height: 8px; background: #23232d; border-radius: 4px; overflow: hidden; margin-top: 6px; }
+  .prog i { display: block; height: 100%; width: 0; background: linear-gradient(90deg, var(--accent), var(--accent2)); transition: width .4s; }
+  .status { font-family: var(--mono); font-size: 13px; color: var(--muted); display: flex; gap: 14px; flex-wrap: wrap; }
+  .status b { color: var(--text); }
+  .err { white-space: pre-wrap; font-family: var(--mono); font-size: 12px; color: #ff8a96; background: #1d0e11; border: 1px solid #4a1a22;
+         border-radius: 8px; padding: 10px; margin-top: 8px; max-height: 180px; overflow: auto; }
+  .result { display: none; margin-top: 10px; }
+  .result video { width: 100%; max-height: 380px; background: #000; border-radius: 10px; }
+  .row { display: flex; gap: 12px; align-items: center; margin-top: 8px; flex-wrap: wrap; }
+  .modal { position: fixed; inset: 0; background: rgba(0,0,0,.8); display: none; align-items: center; justify-content: center; z-index: 20; }
+  .modal.on { display: flex; }
+  .modal .box { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px; width: min(900px, 92vw); }
+  .modal video { width: 100%; max-height: 70vh; background: #000; border-radius: 8px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>GHOST<span>CUT</span></h1>
+  <div class="tag">Found-footage horror splicer · runs entirely in your browser</div>
+  <div class="spacer"></div>
+  <div class="engine" id="engine">Engine: <b>starting…</b></div>
+  <button class="ghost" id="reset">Start fresh</button>
+</header>
+
+<main>
+  <aside>
+    <div class="panel">
+      <h2>The movie</h2>
+      <label class="f">Title <input type="text" data-k="title" placeholder="PARANORMAL ACTIVITY"></label>
+      <label class="f">Subtitle (under the title) <input type="text" data-k="subtitle" placeholder="A Grigson Family Production"></label>
+      <label class="f">Whose house? <input type="text" data-k="family" placeholder="the Grigson">
+        <span class="hint">Fills in “recovered from <b>the Grigson</b> residence”.</span></label>
+      <label class="f">Opening text (leave blank for the automatic line)
+        <textarea data-k="intro_text" placeholder="The following footage was recovered from the Grigson residence. It has not been altered."></textarea></label>
+      <label class="f">Closing text <textarea data-k="outro_text"></textarea></label>
+      <label class="f">Credits (one per line) <textarea data-k="credits" placeholder="Directed by …&#10;Camera by …&#10;Starring …"></textarea></label>
+    </div>
+
+    <div class="panel" style="margin-top:14px">
+      <h2>The look</h2>
+      <div class="looks" id="looks"></div>
+      <label class="f">Between clips <select data-k="transition"></select></label>
+      <label class="f">Nights <select data-k="nights_mode">
+        <option value="per_clip">Every clip is a new night (classic)</option>
+        <option value="single">One long night</option>
+        <option value="manual">I’ll mark where each night starts</option>
+      </select></label>
+      <label class="f">Dread drone volume
+        <div class="range"><input type="range" min="0" max="1" step="0.05" data-k="drone"><span id="droneVal"></span></div></label>
+      <label class="check"><input type="checkbox" data-k="title_card"> Opening text + title card</label>
+      <label class="check"><input type="checkbox" data-k="night_cards"> “NIGHT #1” cards</label>
+      <label class="check"><input type="checkbox" data-k="timestamps"> Camcorder clock / REC overlay</label>
+      <label class="check"><input type="checkbox" data-k="end_card"> Closing text + credits</label>
+      <label class="f">First night’s date <input type="text" data-k="start_date" placeholder="YYYY-MM-DD (blank = 3 weeks ago)"></label>
+      <label class="f">Shape <select data-k="canvas">
+        <option value="auto">Auto (majority of clips)</option>
+        <option value="landscape">Landscape 1920×1080</option>
+        <option value="portrait">Portrait 1080×1920 (phone)</option>
+      </select></label>
+      <label class="f">Output file name <input type="text" data-k="output_name" placeholder="(uses the title)"></label>
+    </div>
+  </aside>
+
+  <section>
+    <div class="panel">
+      <h2>The footage</h2>
+      <div class="drop" id="drop">
+        <b>Drop the videos here</b>
+        or click to choose them. iPhone .MOV / .MP4, portrait or landscape, HDR is fine.
+        <input type="file" id="file" accept="video/*,.mov,.MOV,.mp4,.m4v" multiple hidden>
+      </div>
+      <div class="hint">Everything stays on this computer: the clips are read by your browser and never uploaded. Use a laptop or desktop,
+        keep this tab open while it renders, and expect roughly a minute of rendering per 20 seconds of iPhone footage.</div>
+      <div id="clips"></div>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="inner">
+    <div>
+      <div class="status">
+        <span>Clips: <b id="nClips">0</b></span>
+        <span>Footage: <b id="footage">0:00</b></span>
+        <span>Shape: <b id="shape">—</b></span>
+        <span id="msg"></span>
+      </div>
+      <div class="prog"><i id="bar"></i></div>
+      <div class="err" id="err" style="display:none"></div>
+      <div class="result" id="result">
+        <video id="player" controls playsinline></video>
+        <div class="row"><a id="dl" class="primary" href="#" download><button class="primary">Save the movie</button></a><span class="hint" id="outInfo"></span></div>
+      </div>
+    </div>
+    <div><button class="primary" id="render" style="padding:14px 28px;font-size:16px" disabled>Render the movie</button></div>
+  </div>
+</footer>
+
+<div class="modal" id="modal"><div class="box">
+  <video id="pv" controls autoplay playsinline></video>
+  <div class="row"><span class="hint" style="flex:1">6-second preview at half resolution with the current look.</span><button id="pvClose">Close</button></div>
+</div></div>
+
+<script type="module">
+import { Engine, Renderer, STYLES, TRANSITIONS, defaultProject, planNights, chooseCanvas, clipSpan } from "./app.js";
+
+const $ = (s, r = document) => r.querySelector(s);
+const fmt = s => { s = Math.round(s); return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0"); };
+const esc = s => String(s).replace(/[&<>"]/g, m => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[m]));
+const engine = new Engine();
+let state = Object.assign(defaultProject(), load());
+let clips = [];        // {id, file, name, meta, thumb, start, end, effect, scare_at, new_night, pending}
+let busy = false;
+
+function load() { try { return JSON.parse(localStorage.getItem("ghostcut.settings") || "{}"); } catch (_) { return {}; } }
+function save() { try { localStorage.setItem("ghostcut.settings", JSON.stringify(state)); } catch (_) {} }
+function setMsg(t) { $("#msg").textContent = t || ""; }
+function showErr(e) { const b = $("#err"); b.style.display = "block"; b.textContent = (e && e.message) || String(e); console.error(e); }
+function clearErr() { $("#err").style.display = "none"; }
+function setEngine(text, ok = true) { const el = $("#engine"); el.classList.toggle("bad", !ok); el.innerHTML = `Engine: <b>${esc(text)}</b>`; }
+
+// ---------- settings ----------
+function bindSettings() {
+  document.querySelectorAll("[data-k]").forEach(el => {
+    const k = el.dataset.k;
+    const ev = (el.type === "checkbox" || el.tagName === "SELECT" || el.type === "range") ? "change" : "input";
+    el.addEventListener(ev, () => {
+      state[k] = el.type === "checkbox" ? el.checked : el.type === "range" ? parseFloat(el.value) : el.value;
+      save(); renderClips();
+    });
+    if (el.type === "range") el.addEventListener("input", () => $("#droneVal").textContent = Math.round(el.value * 100) + "%");
+  });
+}
+function fillSettings() {
+  document.querySelectorAll("[data-k]").forEach(el => {
+    const k = el.dataset.k;
+    if (el.type === "checkbox") el.checked = !!state[k];
+    else if (document.activeElement !== el) el.value = state[k] ?? "";
+  });
+  $("#droneVal").textContent = Math.round((state.drone || 0) * 100) + "%";
+  document.querySelectorAll(".look").forEach(l => l.classList.toggle("on", l.dataset.v === state.style));
+}
+function buildLooks() {
+  const box = $("#looks"); box.innerHTML = "";
+  for (const [k, s] of Object.entries(STYLES)) {
+    const l = document.createElement("label"); l.className = "look"; l.dataset.v = k;
+    l.innerHTML = `<input type="radio" name="style" value="${k}"><b>${s.name}</b><small>${s.blurb}</small>`;
+    l.querySelector("input").addEventListener("change", () => { state.style = k; save(); fillSettings(); renderClips(); });
+    box.appendChild(l);
+  }
+  const t = $("[data-k=transition]"); t.innerHTML = "";
+  for (const [k, v] of Object.entries(TRANSITIONS)) t.appendChild(new Option(v, k));
+}
+
+// ---------- clips ----------
+function renderClips() {
+  const box = $("#clips"); box.innerHTML = "";
+  const ready = clips.filter(c => !c.pending);
+  const plan = ready.length ? planNights(state, ready) : [];
+  $("#nClips").textContent = clips.length;
+  $("#footage").textContent = fmt(plan.reduce((a, p) => a + p.duration, 0));
+  $("#shape").textContent = ready.length ? chooseCanvas(state, ready).join("×") : "—";
+  $("#render").disabled = busy || !ready.length || !engine.ff;
+  if (!clips.length) { box.innerHTML = '<div class="empty">No clips yet. Drop some in above.</div>'; return; }
+  clips.forEach((c, i) => {
+    const d = document.createElement("div"); d.className = "clip" + (c.pending ? " pending" : ""); d.draggable = !c.pending; d.dataset.id = c.id;
+    if (c.pending) {
+      d.innerHTML = `<div class="thumbwrap"><img alt=""><span class="num">${i + 1}</span></div><div><div class="name">${esc(c.name)}</div><div class="meta">${esc(c.pending)}</div></div><div></div>`;
+      box.appendChild(d); return;
+    }
+    const p = plan[ready.indexOf(c)] || {};
+    const dur = c.meta.duration;
+    const look = c.effect && c.effect !== "style" ? c.effect : state.style;
+    const clockOn = state.timestamps && STYLES[look]?.clock;
+    d.innerHTML = `
+      <div class="thumbwrap"><img src="${c.thumb || ""}" alt=""><span class="num">${i + 1}</span><span class="dur">${fmt(dur)}</span></div>
+      <div>
+        <div class="name">${esc(c.name)}</div>
+        <div class="meta">${c.meta.width}×${c.meta.height} · ${c.meta.portrait ? "portrait" : "landscape"}${c.meta.hdr ? ' · <span class="hdr">HDR → tone-mapped</span>' : ""}${c.meta.has_audio ? "" : " · no audio"}
+          ${p.night ? ` · Night ${p.night}${clockOn ? " · " + p.clock.toLocaleString([], { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }) : ""}` : ""}</div>
+        <div class="ctl">
+          <div><label>Start at (s)</label><input type="number" min="0" step="0.5" data-ck="start" value="${c.start || 0}"></div>
+          <div><label>End at (s)</label><input type="number" min="0" step="0.5" data-ck="end" value="${c.end || ""}" placeholder="${dur.toFixed(1)}"></div>
+          <div><label>Look</label><select data-ck="effect"><option value="style">Use movie look</option>${Object.entries(STYLES).map(([k, s]) => `<option value="${k}">${s.name}</option>`).join("")}</select></div>
+          <div><label>Jump scare at (s)</label><div class="scare"><input type="checkbox" data-ck="scare_on" ${c.scare_at != null && c.scare_at !== "" ? "checked" : ""}>
+            <input type="number" min="0.3" step="0.1" data-ck="scare_at" value="${c.scare_at ?? ""}" placeholder="${Math.max(0.5, (p.duration || dur) / 2).toFixed(1)}"></div></div>
+          ${state.nights_mode === "manual" ? `<div><label>Night</label><label class="check" style="margin:4px 0"><input type="checkbox" data-ck="new_night" ${c.new_night || i === 0 ? "checked" : ""} ${i === 0 ? "disabled" : ""}> starts a new night</label></div>` : ""}
+        </div>
+      </div>
+      <div class="side">
+        <button data-act="up" ${i === 0 ? "disabled" : ""}>▲</button>
+        <button data-act="down" ${i === clips.length - 1 ? "disabled" : ""}>▼</button>
+        <button data-act="preview" ${busy ? "disabled" : ""}>Preview</button>
+        <button data-act="del" class="del">Remove</button>
+      </div>`;
+    d.querySelector("[data-ck=effect]").value = c.effect || "style";
+    d.querySelectorAll("[data-ck]").forEach(el => el.addEventListener("change", () => updateClip(c, d)));
+    d.querySelectorAll("[data-act]").forEach(b => b.addEventListener("click", e => { e.stopPropagation(); clipAction(b.dataset.act, c, i); }));
+    d.addEventListener("dragstart", e => { d.classList.add("dragging"); e.dataTransfer.setData("text/plain", c.id); e.dataTransfer.effectAllowed = "move"; });
+    d.addEventListener("dragend", () => d.classList.remove("dragging"));
+    d.addEventListener("dragover", e => { e.preventDefault(); d.classList.add("dropTarget"); });
+    d.addEventListener("dragleave", () => d.classList.remove("dropTarget"));
+    d.addEventListener("drop", e => {
+      e.preventDefault(); d.classList.remove("dropTarget");
+      const from = e.dataTransfer.getData("text/plain"); if (!from || from === c.id) return;
+      const fi = clips.findIndex(x => x.id === from), ti = clips.findIndex(x => x.id === c.id);
+      const [moved] = clips.splice(fi, 1); clips.splice(ti, 0, moved); renderClips();
+    });
+    box.appendChild(d);
+  });
+}
+function updateClip(c, d) {
+  const on = d.querySelector("[data-ck=scare_on]").checked;
+  let at = parseFloat(d.querySelector("[data-ck=scare_at]").value);
+  if (on && isNaN(at)) at = parseFloat(d.querySelector("[data-ck=scare_at]").placeholder);
+  c.start = parseFloat(d.querySelector("[data-ck=start]").value) || 0;
+  c.end = parseFloat(d.querySelector("[data-ck=end]").value) || 0;
+  c.effect = d.querySelector("[data-ck=effect]").value;
+  c.scare_at = on ? at : null;
+  const nn = d.querySelector("[data-ck=new_night]"); if (nn) c.new_night = nn.checked;
+  renderClips();
+}
+async function clipAction(act, c, i) {
+  if (act === "del") { if (!confirm(`Remove ${c.name} from the movie?`)) return; if (c.thumb) URL.revokeObjectURL(c.thumb); clips.splice(i, 1); renderClips(); }
+  else if (act === "up" || act === "down") { const j = act === "up" ? i - 1 : i + 1; [clips[i], clips[j]] = [clips[j], clips[i]]; renderClips(); }
+  else if (act === "preview") await runJob(async progress => {
+    const ready = clips.filter(x => !x.pending);
+    const blob = await new Renderer(engine, state, ready, progress).preview(ready.indexOf(c));
+    const url = URL.createObjectURL(blob);
+    $("#pv").src = url; $("#modal").classList.add("on");
+    return null;
+  });
+}
+
+// ---------- adding files ----------
+const drop = $("#drop"), fileIn = $("#file");
+drop.addEventListener("click", () => fileIn.click());
+fileIn.addEventListener("change", () => { addFiles([...fileIn.files]); fileIn.value = ""; });
+["dragenter", "dragover"].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add("over"); }));
+["dragleave", "drop"].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove("over"); }));
+drop.addEventListener("drop", e => addFiles([...e.dataTransfer.files]));
+document.addEventListener("dragover", e => e.preventDefault());
+document.addEventListener("drop", e => { if (!e.target.closest(".clip") && !e.target.closest("#drop")) { e.preventDefault(); addFiles([...e.dataTransfer.files]); } });
+
+async function addFiles(files) {
+  files = files.filter(f => /\.(mov|mp4|m4v|mkv|avi|3gp|hevc|webm|mts|m2ts)$/i.test(f.name) || (f.type || "").startsWith("video/"));
+  if (!files.length) return;
+  clearErr();
+  const entries = files.map(f => ({ id: Math.random().toString(36).slice(2, 10), file: f, name: f.name, pending: "reading…", start: 0, end: 0, effect: "style", scare_at: null, new_night: false }));
+  clips.push(...entries); renderClips();
+  await engineReady();
+  for (const c of entries) {
+    try {
+      c.meta = await engine.probe(c.file);
+      c.pending = "making thumbnail…"; renderClips();
+      try { c.thumb = URL.createObjectURL(await engine.thumbnail(c.file, Math.min(1, c.meta.duration / 2))); } catch (_) { c.thumb = ""; }
+      c.pending = null;
+    } catch (e) {
+      clips.splice(clips.indexOf(c), 1);
+      showErr(new Error(`${c.name}: ${e.message}`));
+    }
+    renderClips();
+  }
+  // keep the camera's own chronological order for anything just added
+  const ready = clips.filter(x => !x.pending);
+  ready.sort((a, b) => (a.meta.created || "9999").localeCompare(b.meta.created || "9999") || a.name.localeCompare(b.name));
+  clips = [...ready, ...clips.filter(x => x.pending)];
+  renderClips();
+}
+
+// ---------- engine + jobs ----------
+let enginePromise = null;
+function engineReady() {
+  if (!enginePromise) enginePromise = engine.load(t => setEngine(t)).then(() => { setEngine(engine.mode); renderClips(); })
+    .catch(e => { enginePromise = null; setEngine("failed to load", false); showErr(new Error("The video engine could not load. Reload the page and try again.\n" + e.message)); throw e; });
+  return enginePromise;
+}
+async function runJob(fn) {
+  if (busy) return;
+  busy = true; clearErr(); renderClips(); $("#bar").style.width = "0%";
+  const t0 = Date.now();
+  const progress = (frac, msg) => { $("#bar").style.width = (frac * 100).toFixed(1) + "%"; setMsg(`${Math.round(frac * 100)}% · ${msg} · ${fmt((Date.now() - t0) / 1000)} elapsed`); };
+  try {
+    await engineReady();
+    await engine.run(() => fn(progress));
+    setMsg(`Done in ${fmt((Date.now() - t0) / 1000)}`);
+  } catch (e) {
+    showErr(e); setMsg("Failed"); $("#bar").style.width = "0%";
+    // a failed exec can leave the wasm heap in a bad state; start clean next time
+    engine.terminate(); enginePromise = null; setEngine("restarting…", false);
+    engineReady().catch(() => {});
+  } finally { busy = false; renderClips(); }
+}
+$("#render").addEventListener("click", () => runJob(async progress => {
+  $("#result").style.display = "none";
+  const ready = clips.filter(x => !x.pending);
+  const blob = await new Renderer(engine, state, ready, progress).run();
+  const name = ((state.output_name || state.title || "ghostcut").replace(/[^A-Za-z0-9 ._-]+/g, "").trim() || "ghostcut") + ".mp4";
+  if ($("#player").src) URL.revokeObjectURL($("#player").src);
+  const url = URL.createObjectURL(blob);
+  $("#player").src = url; $("#dl").href = url; $("#dl").download = name;
+  $("#outInfo").textContent = `${name} · ${(blob.size / 1048576).toFixed(0)} MB`;
+  $("#result").style.display = "block"; $("#player").scrollIntoView({ behavior: "smooth", block: "center" });
+}));
+$("#pvClose").addEventListener("click", () => { $("#modal").classList.remove("on"); $("#pv").pause(); if ($("#pv").src) URL.revokeObjectURL($("#pv").src); $("#pv").removeAttribute("src"); $("#pv").load(); });
+$("#modal").addEventListener("click", e => { if (e.target === e.currentTarget) $("#pvClose").click(); });
+$("#reset").addEventListener("click", () => {
+  if (!confirm("Start fresh? This clears the clip list and resets the settings.")) return;
+  clips.forEach(c => c.thumb && URL.revokeObjectURL(c.thumb)); clips = [];
+  state = defaultProject(); save(); fillSettings(); renderClips(); clearErr(); $("#result").style.display = "none";
+});
+window.addEventListener("beforeunload", e => { if (busy) { e.preventDefault(); e.returnValue = ""; } });
+
+buildLooks(); bindSettings(); fillSettings(); renderClips();
+engineReady().catch(() => {});
+// exposed for tests
+window.__ghostcut = { engine, get clips() { return clips; }, get state() { return state; }, set state(s) { state = s; save(); fillSettings(); renderClips(); } };
+</script>
+</body>
+</html>
