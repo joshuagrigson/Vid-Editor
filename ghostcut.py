@@ -114,6 +114,13 @@ def _font_candidates(kind: str) -> list[str]:
             os.path.join(lin, "dejavu", "DejaVuSerif.ttf"),
             os.path.join(lin, "liberation", "LiberationSerif-Regular.ttf"),
         ]
+    if kind == "bold":
+        return [
+            os.path.join(win, "impact.ttf"), os.path.join(win, "ariblk.ttf"), os.path.join(win, "arialbd.ttf"),
+            os.path.join(macs, "Impact.ttf"), os.path.join(macs, "Arial Black.ttf"), os.path.join(macs, "Arial Bold.ttf"),
+            os.path.join(lin, "dejavu", "DejaVuSans-Bold.ttf"),
+            os.path.join(lin, "liberation", "LiberationSans-Bold.ttf"),
+        ]
     # sans
     return [
         os.path.join(win, "arial.ttf"), os.path.join(win, "segoeui.ttf"),
@@ -189,7 +196,7 @@ def make_card(path: str, W: int, H: int, title: str = "", subtitle: str = "", bo
     blocks = []  # (font, text, spacing, fill, gap_after, is_body)
     if title:
         f = load_font(title_kind, int(H * title_scale))
-        sp = f.size * 0.18
+        sp = f.size * (0.08 if title_kind == "bold" else 0.18)
         for ln in wrap_text(title.upper(), f, W * 0.86, sp):
             blocks.append((f, ln, sp, white, int(30 * S), False))
     if subtitle:
@@ -503,6 +510,13 @@ def default_project() -> dict:
         "output_name": "",
         "trailer_length": 60,
         "trailer_taglines": "",
+        "bed": "drone",                # drone | heartbeat | wind | musicbox | hum | none | custom
+        "card_font": "serif",          # serif | mono | bold
+        "trailer_pace": "classic",     # slow | classic | relentless
+        "trailer_pick": "auto",        # auto | markers
+        "trailer_booms": True, "trailer_static": True, "trailer_flash": True, "trailer_shake": True,
+        "trailer_slowmo": True, "trailer_posttitle": True, "trailer_bw": False,
+        "trailer_words": "", "trailer_dateline": "",
         "seed": random.randint(1, 999999),
         "clips": [],                   # [{id, file, name, meta, start, end, effect, scare_at, new_night}]
     }
@@ -588,6 +602,67 @@ BOOM = ("aevalsrc=exprs='0.9*sin(2*PI*48*t)*exp(-3.5*t)+0.4*sin(2*PI*95*t)*exp(-
 
 TRAILER_LENGTHS = {45: (2, 4, 6), 60: (3, 5, 8), 90: (4, 7, 12)}   # setup, escalation, montage shots
 DEFAULT_TAGLINES = "THIS HALLOWEEN\nSOMETHING IS IN THE HOUSE\nNO ONE WILL BELIEVE THEM\nCOMING SOON"
+PACES = {   # shot lengths (s) and a multiplier on how many shots
+    "slow": {"name": "Slow burn", "setup": 3.0, "esc": 1.9, "mont": 1.0, "count": 0.8},
+    "classic": {"name": "Classic", "setup": 2.4, "esc": 1.5, "mont": 0.8, "count": 1.0},
+    "relentless": {"name": "Relentless", "setup": 1.8, "esc": 1.1, "mont": 0.55, "count": 1.35},
+}
+BEDS = {
+    "drone": ("Dread Drone", "Low, slow, unsettling. The classic found-footage bed."),
+    "heartbeat": ("Heartbeat", "A slow, heavy pulse with a faint hum underneath."),
+    "wind": ("Wind & Whispers", "Air moving through an empty house, with something almost like a voice."),
+    "musicbox": ("Music Box", "A detuned lullaby echoing down a hallway."),
+    "hum": ("Electrical Hum", "Mains buzz, tape hiss and the odd crackle. Security-camera cold."),
+    "none": ("Silence", "No bed. Just the footage, the hits and the stingers."),
+    "custom": ("Your own sound", "Upload an mp3, m4a or wav. Looped or trimmed to fit, faded in and out."),
+}
+AUDIO_EXTS = {".mp3", ".m4a", ".wav", ".aac", ".ogg", ".flac", ".aiff", ".aif", ".wma", ".opus"}
+
+
+def bed_graph(kind: str, total: float, gain: float, sound_in: int | None = None) -> list[str] | None:
+    """Filtergraph lines for the sound bed, ending in [bed]. Mirrors app.js bedGraph. None = no bed."""
+    g = max(0.0, gain)
+    if kind == "none" or g <= 0:
+        return None
+    tail = f",afade=t=in:st=0:d=3,afade=t=out:st={max(0.0, total - 4):.3f}:d=4"
+    if kind == "custom":
+        if sound_in is None:
+            return None
+        return [f"[{sound_in}:a]aresample={AUDIO_RATE},aformat=sample_fmts=fltp:channel_layouts=stereo,"
+                f"atrim=duration={total:.3f},volume={1.0 * g:.3f}{tail}[bed]"]
+    if kind == "heartbeat":
+        return [f"aevalsrc=exprs='0.9*sin(2*PI*52*t)*exp(-11*mod(t,0.95))+0.55*sin(2*PI*46*t)*exp(-12*mod(t-0.2,0.95))"
+                f"*gte(mod(t,0.95),0.2)+0.06*sin(2*PI*38*t)':s={AUDIO_RATE},aformat=channel_layouts=stereo,"
+                f"lowpass=f=140,volume={0.55 * g:.3f}{tail}[bed]"]
+    if kind == "wind":
+        return [f"anoisesrc=color=brown:amplitude=0.8:r={AUDIO_RATE},aformat=channel_layouts=stereo,highpass=f=70,"
+                "lowpass=f=900,volume='if(isnan(t),0.55,0.55+0.45*sin(2*PI*0.09*t))':eval=frame[w1]",
+                f"aevalsrc=exprs='0.07*sin(2*PI*(520+40*sin(2*PI*0.21*t))*t)*(0.5+0.5*sin(2*PI*0.05*t+1))"
+                f"+0.05*sin(2*PI*(310+25*sin(2*PI*0.17*t))*t)*(0.5+0.5*sin(2*PI*0.037*t))':s={AUDIO_RATE},"
+                "aformat=channel_layouts=stereo[w2]",
+                f"[w1][w2]amix=inputs=2:normalize=0,volume={0.85 * g:.3f}{tail}[bed]"]
+    if kind == "musicbox":
+        n = "mod(floor(t/0.55),8)"
+        f = (f"if(eq({n},0),659.3,if(eq({n},1),587.3,if(eq({n},2),523.3,if(eq({n},3),587.3,"
+             f"if(eq({n},4),659.3,if(eq({n},5),659.3,if(eq({n},6),659.3,0)))))))")
+        env = "exp(-4.5*mod(t,0.55))"
+        return [f"aevalsrc=exprs='(sin(2*PI*{f}*t)+0.45*sin(2*PI*{f}*2.01*t)+0.2*sin(2*PI*{f}*3.02*t))*{env}*0.35'"
+                f":s={AUDIO_RATE},aformat=channel_layouts=stereo,aecho=0.8:0.55:180|340:0.35|0.2,lowpass=f=4500,"
+                f"volume={1.5 * g:.3f}{tail}[bed]"]
+    if kind == "hum":
+        return [f"aevalsrc=exprs='0.5*sin(2*PI*60*t)+0.18*sin(2*PI*120*t)+0.08*sin(2*PI*180*t)':s={AUDIO_RATE},"
+                "aformat=channel_layouts=stereo[h1]",
+                f"anoisesrc=color=white:amplitude=0.12:r={AUDIO_RATE},aformat=channel_layouts=stereo,highpass=f=2500[h2]",
+                f"aevalsrc=exprs='0.8*(random(0)-0.5)*gt(random(1),0.9993)':s={AUDIO_RATE},aformat=channel_layouts=stereo,"
+                "lowpass=f=6000[h3]",
+                f"[h1][h2][h3]amix=inputs=3:normalize=0,volume={0.35 * g:.3f}{tail}[bed]"]
+    return [
+        "aevalsrc=exprs='0.55*sin(2*PI*46*t)*(0.75+0.25*sin(2*PI*0.11*t))"
+        "+0.35*sin(2*PI*47.6*t)+0.22*sin(2*PI*92*t)*(0.5+0.5*sin(2*PI*0.07*t+1))"
+        f"+0.18*sin(2*PI*138.5*t)*(0.5+0.5*sin(2*PI*0.05*t+2))':s={AUDIO_RATE},aformat=channel_layouts=stereo[dr1]",
+        f"anoisesrc=color=brown:amplitude=0.6:r={AUDIO_RATE},aformat=channel_layouts=stereo,lowpass=f=300[dr2]",
+        f"[dr1][dr2]amix=inputs=2:normalize=0,volume={0.30 * g:.3f}{tail}[bed]",
+    ]
 
 
 def analyze_loudness(path: str, start: float, dur: float) -> list[dict]:
@@ -612,12 +687,23 @@ def analyze_loudness(path: str, start: float, dur: float) -> list[dict]:
 
 def plan_trailer(proj: dict, analyses: dict[int, list[dict]], length: int = 60) -> dict:
     """Pick the moments and lay out the trailer. Deterministic for a given seed. Mirrors app.js planTrailer."""
-    counts = TRAILER_LENGTHS.get(int(length), TRAILER_LENGTHS[60])
+    base = TRAILER_LENGTHS.get(int(length), TRAILER_LENGTHS[60])
+    pace = PACES.get(proj.get("trailer_pace") or "classic", PACES["classic"])
+    counts = (max(1, round(base[0] * pace["count"])), max(2, round(base[1] * pace["count"])), max(3, round(base[2] * pace["count"])))
+    o = {
+        "booms": proj.get("trailer_booms", True) is not False, "static": proj.get("trailer_static", True) is not False,
+        "flash": proj.get("trailer_flash", True) is not False, "shake": proj.get("trailer_shake", True) is not False,
+        "slowmo": 1.6 if proj.get("trailer_slowmo", True) is not False else 0.0,
+        "posttitle": proj.get("trailer_posttitle", True) is not False, "bw": bool(proj.get("trailer_bw")),
+        "markers": proj.get("trailer_pick") == "markers", "pace": proj.get("trailer_pace") or "classic",
+    }
     clips = proj["clips"]
     plans = plan_nights(proj)
     rng = random.Random(int(proj.get("seed") or 1) + 77)
+    use = [i for i, c in enumerate(clips) if c.get("in_trailer", True) is not False] or list(range(len(clips)))
     wins: list[dict] = []
-    for ci, clip in enumerate(clips):
+    for ci in use:
+        clip = clips[ci]
         dur = plans[ci]["duration"]
         a = [w for w in (analyses.get(ci) or []) if 0 <= w["t"] <= dur]
         if len(a) < 4:
@@ -632,8 +718,17 @@ def plan_trailer(proj: dict, analyses: dict[int, list[dict]], length: int = 60) 
             jump = max(0.0, w["db"] - before) / span
             wins.append({"clip": ci, "t": w["t"], "db": w["db"], "dur": dur,
                          "score": 0.55 * loud + 0.45 * min(1.0, jump * 2) + rng.random() * 0.02})
+        # a jump-scare mark the user placed is a candidate too; with "markers" it outranks everything measured
+        m = clip.get("scare_at")
+        try:
+            mt = float(m) if m not in (None, "", False) else None
+        except (TypeError, ValueError):
+            mt = None
+        if mt is not None and 0 <= mt <= dur:
+            wins.append({"clip": ci, "t": mt, "db": 0.0, "dur": dur, "marked": True,
+                         "score": (2 + rng.random() * 0.01) if o["markers"] else (0.9 + rng.random() * 0.05)})
     taken: list[dict] = []
-    total_dur = sum(p["duration"] for p in plans)
+    total_dur = sum(plans[ci]["duration"] for ci in use)
     wanted = sum(counts) + 1
     gap = max(1.2, min(6.0, total_dur / (wanted * 2.5)))
 
@@ -643,14 +738,16 @@ def plan_trailer(proj: dict, analyses: dict[int, list[dict]], length: int = 60) 
     def fit(w, lead, ln):
         return w["t"] - lead >= 0 and w["t"] - lead + ln <= w["dur"]
 
+    sm = o["slowmo"] or 1.0
+    fin_lead, fin_len = 1.4 / sm, 2.4 / sm
     by_score = sorted(wins, key=lambda w: -w["score"])
-    finale = next((w for w in by_score if fit(w, 1.4, 2.4)), by_score[0] if by_score else None)
+    finale = next((w for w in by_score if fit(w, fin_lead, fin_len)), by_score[0] if by_score else None)
     if finale:
         taken.append(finale)
 
     def pick(n, ln, lead):
         out, per_clip = [], {}
-        cap = math.ceil(n / max(1, len(clips))) + 1
+        cap = math.ceil(n / max(1, len(use))) + 1
         for w in by_score:
             if len(out) >= n:
                 break
@@ -661,15 +758,16 @@ def plan_trailer(proj: dict, analyses: dict[int, list[dict]], length: int = 60) 
             per_clip[w["clip"]] = per_clip.get(w["clip"], 0) + 1
         return out
 
-    esc = pick(counts[1], 1.5, 0.6)
-    montage = pick(counts[2], 0.8, 0.3)
+    esc_lead, mont_lead = min(0.6, pace["esc"] * 0.4), min(0.3, pace["mont"] * 0.35)
+    esc = pick(counts[1], pace["esc"], esc_lead)
+    montage = pick(counts[2], pace["mont"], mont_lead)
     setup = []
-    for w in sorted(wins, key=lambda w: w["score"]):
+    for w in sorted((w for w in wins if not w.get("marked")), key=lambda w: w["score"]):
         if len(setup) >= counts[0]:
             break
-        if w["t"] > w["dur"] * 0.6 or not fit(w, 0, 2.4) or not free(w):
+        if w["t"] > w["dur"] * 0.6 or not fit(w, 0, pace["setup"]) or not free(w):
             continue
-        if any(s["clip"] == w["clip"] for s in setup) and len(setup) < len(clips):
+        if any(s["clip"] == w["clip"] for s in setup) and len(setup) < len(use):
             continue
         setup.append(w)
         taken.append(w)
@@ -685,29 +783,42 @@ def plan_trailer(proj: dict, analyses: dict[int, list[dict]], length: int = 60) 
                 mont.append(by_clip[k].pop(0))
 
     tags = [s.strip() for s in (proj.get("trailer_taglines") or DEFAULT_TAGLINES).splitlines() if s.strip()]
+    words = [s.strip() for s in (proj.get("trailer_words") or "").splitlines() if s.strip()]
     items: list[dict] = [{"type": "black", "dur": 1.0}]
     if len(tags) > 0:
         items.append({"type": "card", "title": tags[0], "dur": 1.9})
-    items += [{"type": "moment", "clip": w["clip"], "start": w["t"], "dur": 2.4, "transition": "black"} for w in setup]
+    items += [{"type": "moment", "clip": w["clip"], "start": w["t"], "dur": pace["setup"], "transition": "black"} for w in setup]
     if len(tags) > 1:
         items.append({"type": "card", "title": tags[1], "dur": 1.9})
     for i, w in enumerate(esc):
-        if i > 0:
+        if i > 0 and o["static"]:
             items.append({"type": "static", "dur": 0.14})
-        items.append({"type": "moment", "clip": w["clip"], "start": w["t"] - 0.6, "dur": 1.5, "boom": True})
+        items.append({"type": "moment", "clip": w["clip"], "start": w["t"] - esc_lead, "dur": pace["esc"],
+                      "boom": o["booms"], "shake": o["shake"]})
     if len(tags) > 2:
         items.append({"type": "card", "title": tags[2], "dur": 1.9})
-    items += [{"type": "moment", "clip": w["clip"], "start": w["t"] - 0.3, "dur": 0.8, "flash": True, "riser": True} for w in mont]
+    for i, w in enumerate(mont):
+        items.append({"type": "moment", "clip": w["clip"], "start": w["t"] - mont_lead, "dur": pace["mont"],
+                      "flash": o["flash"], "riser": True})
+        if words and i % 2 == 1 and i < len(mont) - 1:
+            items.append({"type": "word", "text": words[(i // 2) % len(words)], "dur": 0.12})
     items.append({"type": "black", "dur": 0.9, "quiet": True})
     if finale:
-        items.append({"type": "moment", "clip": finale["clip"], "start": max(0.0, finale["t"] - 1.4), "dur": 2.4, "scare": 1.4})
+        items.append({"type": "moment", "clip": finale["clip"], "start": max(0.0, finale["t"] - fin_lead), "dur": 2.4,
+                      "scare": 1.4, "slowmo": o["slowmo"], "boom": o["booms"]})
     items.append({"type": "static", "dur": 0.2})
-    items.append({"type": "card", "title": proj.get("title") or "UNTITLED", "subtitle": proj.get("subtitle") or "",
+    dateline = (proj.get("trailer_dateline") or "").strip()
+    subtitle = "   ·   ".join(s for s in (proj.get("subtitle") or "", dateline) if s)
+    items.append({"type": "card", "title": proj.get("title") or "UNTITLED", "subtitle": subtitle,
                   "dur": 3.4, "big": True, "fade_out": 0.7})
     if len(tags) > 3:
         items.append({"type": "card", "title": tags[3], "dur": 2.0, "fade_out": 0.8})
+    if o["posttitle"] and finale:
+        items.append({"type": "black", "dur": 0.7, "quiet": True})
+        items.append({"type": "moment", "clip": finale["clip"], "start": max(0.0, finale["t"] - 0.1), "dur": 0.35,
+                      "negate": True, "boom": o["booms"], "flash": True})
     items.append({"type": "black", "dur": 1.0})
-    return {"length": int(length), "items": items, "total": sum(it["dur"] for it in items)}
+    return {"length": int(length), "opts": o, "items": items, "total": sum(it["dur"] for it in items)}
 
 
 class Renderer:
@@ -736,17 +847,21 @@ class Renderer:
         return os.path.join(self.build, name + ".mp4")
 
     def render_card(self, name: str, png: str, duration: float, fade_in=0.8, fade_out=0.7,
-                    slam: bool = False, boom: bool = False) -> str:
-        """slam: no fade-in, a two-frame white flash and a slow push-in instead. boom: sub hit on entry."""
+                    slam: bool = False, boom: bool = False, plain: bool = False) -> str:
+        """slam: no fade-in, a two-frame white flash and a slow push-in instead. boom: sub hit on entry.
+        plain: no fades at all (a flash word)."""
         out = self._seg(name)
         W, H = self.W, self.H
-        if slam:
-            vf = (f"scale=w='trunc(iw*(1+0.05*t/{duration:.3f})/2)*2':h='trunc(ih*(1+0.05*t/{duration:.3f})/2)*2':eval=frame,"
-                  f"crop={W}:{H},eq=brightness=0.7:enable='lt(t,0.07)',")
+        if plain:
+            vf = "noise=alls=10:allf=t,format=yuv420p"
         else:
-            vf = f"fade=t=in:st=0:d={fade_in},"
-        vf += (f"fade=t=out:st={duration - fade_out:.3f}:d={fade_out},"
-               f"noise=alls=7:allf=t,eq=brightness='0.012*sin(t*31)':eval=frame,format=yuv420p")
+            if slam:
+                vf = (f"scale=w='trunc(iw*(1+0.05*t/{duration:.3f})/2)*2':h='trunc(ih*(1+0.05*t/{duration:.3f})/2)*2':eval=frame,"
+                      f"crop={W}:{H},eq=brightness=0.7:enable='lt(t,0.07)',")
+            else:
+                vf = f"fade=t=in:st=0:d={fade_in},"
+            vf += (f"fade=t=out:st={duration - fade_out:.3f}:d={fade_out},"
+                   f"noise=alls=7:allf=t,eq=brightness='0.012*sin(t*31)':eval=frame,format=yuv420p")
         audio = f"{BOOM},apad" if boom else f"anullsrc=r={AUDIO_RATE}:cl=stereo"
         args = ["-loop", "1", "-framerate", str(FPS), "-i", png,
                 "-f", "lavfi", "-i", audio,
@@ -800,7 +915,8 @@ class Renderer:
     def render_clip(self, idx: int, clip: dict, plan: dict, preview: bool = False, *,
                     piece: dict | None = None, name: str | None = None, transition: str | None = None,
                     flash: bool = False, boom: bool = False, scare_T: float | None | str = "clip",
-                    label: str = "") -> str:
+                    label: str = "", slowmo: float = 0.0, negate: bool = False, shake: bool = False,
+                    bw: bool = False) -> str:
         """piece = {start, dur} relative to the trimmed clip (default: the whole clip).
         transition overrides the movie setting; flash = white flash on the first frames; boom = sub hit at the
         start; scare_T = seconds into the piece for a jump scare, None for none, "clip" = the clip's own marker."""
@@ -825,15 +941,26 @@ class Renderer:
         n_in = 1
         graph = []
 
-        # video: fps -> HDR fix -> fit onto canvas -> [base]
+        # video: fps -> (slow motion) -> HDR fix -> fit onto canvas -> [base]
+        slowmo = slowmo if slowmo and slowmo > 1 else 0.0
         pre = f"[0:v]fps={FPS},"
+        if slowmo:
+            pre += f"setpts={slowmo:.3f}*PTS,fps={FPS},"
         if meta.get("hdr"):
             pre += hdr_to_sdr_chain(meta["hdr"]) + ","
         graph.append(pre + fit_chain(meta.get("width", 0), meta.get("height", 0), W, H))
         cur = "[base]"
 
-        # look
-        graph.append(f"{cur}{style_video_chain(style, W, H)}[fx]")
+        # look (+ trailer extras)
+        fx = style_video_chain(style, W, H)
+        if bw:
+            fx += ",hue=s=0"
+        if negate:
+            fx += ",negate"
+        if shake:
+            fx += (f",scale=w='trunc(iw*1.04/2)*2':h='trunc(ih*1.04/2)*2',crop={W}:{H}"
+                   f":x='(iw-{W})/2+0.02*iw*sin(t*97)*exp(-6*t)':y='(ih-{H})/2+0.02*ih*sin(t*83)*exp(-6*t)'")
+        graph.append(f"{cur}{fx}[fx]")
         cur = "[fx]"
 
         # jump scare
@@ -893,7 +1020,7 @@ class Renderer:
             asrc = f"[{n_in}:a]"
             n_in += 1
         achain = (f"{asrc}aresample={AUDIO_RATE},aformat=sample_fmts=fltp:channel_layouts=stereo,"
-                  f"{style_audio_chain(style)}")
+                  f"{f'atempo={1 / slowmo:.3f},' if slowmo else ''}{style_audio_chain(style)}")
         if scare_T is not None:
             achain += f",volume=0.12:enable='between(t,{max(0, scare_T - 0.8):.3f},{scare_T - 0.02:.3f})'[a1];"
             achain += jump_scare_audio_source(scare_T, "[sting]") + ";"
@@ -922,30 +1049,38 @@ class Renderer:
             self.segments.append((out, D))
         return out
 
+    def sound_path(self) -> str | None:
+        """The uploaded custom sound file, if the bed is 'custom' and one exists."""
+        if self.proj.get("bed") != "custom":
+            return None
+        snd = os.path.join(self.ws, "sound")
+        if os.path.isdir(snd):
+            for n in sorted(os.listdir(snd)):
+                if os.path.splitext(n)[1].lower() in AUDIO_EXTS:
+                    return os.path.join(snd, n)
+        return None
+
     def render_final(self, out_path: str, riser: tuple[float, float] | None = None,
                      quiet: list[tuple[float, float]] | None = None, drone_gain: float = 1.0) -> None:
-        """riser=(at, dur): rising shriek under that stretch. quiet=[(at, dur)]: drone pulled down there."""
+        """riser=(at, dur): rising shriek under that stretch. quiet=[(at, dur)]: bed pulled down there."""
         total = sum(d for _, d in self.segments)
         lst = os.path.join(self.build, "concat.txt")
         with open(lst, "w", encoding="utf-8") as f:
             f.write("ffconcat version 1.0\n")
             for p, d in self.segments:
                 f.write(f"file '{ffconcat_path(p)}'\nduration {d:.3f}\n")
-        drone = float(self.proj.get("drone") or 0) * drone_gain
+        gain = float(self.proj.get("drone") or 0) * drone_gain
+        inputs = ["-f", "concat", "-safe", "0", "-i", lst]
+        sound = self.sound_path()
+        if sound:
+            inputs += ["-stream_loop", "-1", "-i", sound]
         graph = []
-        if drone > 0:
-            vol = 0.30 * drone
+        bed = bed_graph(self.proj.get("bed") or "drone", total, gain, 1 if sound else None)
+        if bed:
             q = "".join(f",volume=0.05:enable='between(t,{a:.3f},{a + d:.3f})'" for a, d in (quiet or []))
-            graph.append(
-                "aevalsrc=exprs='0.55*sin(2*PI*46*t)*(0.75+0.25*sin(2*PI*0.11*t))"
-                "+0.35*sin(2*PI*47.6*t)+0.22*sin(2*PI*92*t)*(0.5+0.5*sin(2*PI*0.07*t+1))"
-                f"+0.18*sin(2*PI*138.5*t)*(0.5+0.5*sin(2*PI*0.05*t+2))':s={AUDIO_RATE},"
-                "aformat=channel_layouts=stereo[dr1]")
-            graph.append(f"anoisesrc=color=brown:amplitude=0.6:r={AUDIO_RATE},aformat=channel_layouts=stereo,"
-                         "lowpass=f=300[dr2]")
-            graph.append(f"[dr1][dr2]amix=inputs=2:normalize=0,volume={vol:.3f}{q},"
-                         f"afade=t=in:st=0:d=3,afade=t=out:st={max(0, total - 4):.3f}:d=4[drone]")
-            graph.append("[0:a][drone]amix=inputs=2:duration=first:normalize=0[amix]")
+            graph += bed[:-1]
+            graph.append(bed[-1][:-len("[bed]")] + q + "[bed]")
+            graph.append("[0:a][bed]amix=inputs=2:duration=first:normalize=0[amix]")
             acur = "[amix]"
         else:
             acur = "[0:a]"
@@ -961,11 +1096,28 @@ class Renderer:
         script = os.path.join(self.build, "final.filters.txt")
         with open(script, "w", encoding="utf-8") as f:
             f.write(";\n".join(graph) + "\n")
-        args = ["-f", "concat", "-safe", "0", "-i", lst, "-filter_complex_script", script,
-                "-map", "0:v", "-map", "[aout]", "-t", f"{total:.3f}"] + ENC_FINAL + [out_path]
+        args = inputs + ["-filter_complex_script", script,
+                         "-map", "0:v", "-map", "[aout]", "-t", f"{total:.3f}"] + ENC_FINAL + [out_path]
         weight = total * 0.08
         run_ffmpeg(args, total, self._job(weight, "Final assembly"), os.path.join(self.build, "final.log"))
         self._finish(weight)
+
+    def preview_bed(self, out_path: str) -> str:
+        """Six seconds of the chosen sound bed, for auditioning."""
+        kind = self.proj.get("bed") or "drone"
+        sound = self.sound_path()
+        inputs = ["-stream_loop", "-1", "-i", sound] if sound else ["-f", "lavfi", "-i", f"anullsrc=r={AUDIO_RATE}:cl=stereo"]
+        bed = bed_graph(kind, 6, max(0.2, float(self.proj.get("drone") or 0.5)), 0 if sound else None)
+        if not bed:
+            raise FriendlyError("Silence has nothing to listen to." if kind == "none" else "Choose a sound file first.")
+        bed[-1] = re.sub(r",afade=t=in[^\[]*\[bed\]$", ",afade=t=out:st=5.3:d=0.7[bed]", bed[-1])
+        os.makedirs(self.build, exist_ok=True)
+        script = os.path.join(self.build, "bed.filters.txt")
+        with open(script, "w", encoding="utf-8") as f:
+            f.write(";\n".join(bed) + "\n")
+        run_ffmpeg(inputs + ["-filter_complex_script", script, "-map", "[bed]", "-t", "6", "-c:a", "aac", "-b:a", "128k", out_path],
+                   6, None, os.path.join(self.build, "bed.log"))
+        return out_path
 
     # -- trailer -------------------------------------------------------------
     def run_trailer(self, out_path: str, length: int | None = None) -> str:
@@ -990,6 +1142,8 @@ class Renderer:
         self.total_work = work + work * 0.08
         self.segments = []
         at, riser, quiet = 0.0, None, []
+        o = tp.get("opts", {})
+        font = proj.get("card_font") or "serif"
         for k, it in enumerate(tp["items"]):
             nm = f"tr{k:02d}_{it['type']}"
             if it["type"] == "black":
@@ -998,19 +1152,24 @@ class Renderer:
                     quiet.append((at, it["dur"]))
             elif it["type"] == "static":
                 self.render_static(nm, it["dur"])
+            elif it["type"] == "word":
+                png = os.path.join(self.build, nm + ".png")
+                make_card(png, self.W, self.H, title=it["text"], title_kind="bold", title_scale=0.11)
+                self.render_card(nm, png, it["dur"], 0, 0, plain=True)
             elif it["type"] == "card":
                 png = os.path.join(self.build, nm + ".png")
                 big = it.get("big")
-                make_card(png, self.W, self.H, title=it.get("title", ""), subtitle=it.get("subtitle", ""),
+                make_card(png, self.W, self.H, title=it.get("title", ""), subtitle=it.get("subtitle", ""), title_kind=font,
                           title_scale=(0.085 if len(it.get("title", "")) < 22 else 0.06) if big else 0.05)
-                self.render_card(nm, png, it["dur"], 0.8, it.get("fade_out", 0.4), slam=True, boom=True)
+                self.render_card(nm, png, it["dur"], 0.8, it.get("fade_out", 0.4), slam=True, boom=o.get("booms", True))
             elif it["type"] == "moment":
                 if it.get("riser"):
                     riser = (riser[0], at + it["dur"] - riser[0]) if riser else (at, it["dur"])
                 clip = proj["clips"][it["clip"]]
                 self.render_clip(it["clip"], clip, plans[it["clip"]], piece={"start": it["start"], "dur": it["dur"]},
                                  name=nm, transition=it.get("transition", "cut"), flash=bool(it.get("flash")),
-                                 boom=bool(it.get("boom")),
+                                 boom=bool(it.get("boom")), shake=bool(it.get("shake")), slowmo=float(it.get("slowmo") or 0),
+                                 negate=bool(it.get("negate")), bw=bool(o.get("bw")),
                                  scare_T=(min(it["dur"] - 0.4, it["scare"]) if it.get("scare") else None),
                                  label=f" (trailer moment {k + 1} of {len(tp['items'])})")
             at += it["dur"]
@@ -1040,7 +1199,7 @@ class Renderer:
             self.render_typewriter("intro", intro_text_for(proj))
             card = os.path.join(self.build, "title.png")
             make_card(card, self.W, self.H, title=proj["title"] or "UNTITLED", subtitle=proj.get("subtitle", ""),
-                      title_scale=0.085 if len(proj["title"]) < 22 else 0.06)
+                      title_kind=proj.get("card_font") or "serif", title_scale=0.085 if len(proj["title"]) < 22 else 0.06)
             self.render_card("title", card, 4.0, fade_in=1.6, fade_out=0.3)
             self.render_black("black_after_title", 0.8)
 
@@ -1190,6 +1349,10 @@ class Workspace:
         d["total_clip_seconds"] = round(sum(p["duration"] for p in plan), 1)
         d["styles"] = STYLES
         d["transitions"] = TRANSITIONS
+        d["beds"] = {k: {"name": n, "blurb": b} for k, (n, b) in BEDS.items()}
+        snd = os.path.join(self.root, "sound")
+        names = [n for n in (os.listdir(snd) if os.path.isdir(snd) else []) if os.path.splitext(n)[1].lower() in AUDIO_EXTS]
+        d["sound_name"] = names[0] if names else ""
         d["downloads"] = os.path.expanduser("~/Downloads")
         d["output_dir"] = self.output_dir
         return d
@@ -1335,6 +1498,30 @@ def make_handler(ws: Workspace, job: RenderJob):
 
         def do_PUT(self):
             u = urlsplit(self.path)
+            if u.path == "/api/sound":
+                # your own sound bed: one file kept in workspace/sound/
+                name = os.path.basename(parse_qs(u.query).get("name", ["sound.mp3"])[0]) or "sound.mp3"
+                if os.path.splitext(name)[1].lower() not in AUDIO_EXTS:
+                    return self._json({"error": "That doesn't look like an audio file (mp3, m4a, wav, aac, ogg, flac)."}, 400)
+                n = int(self.headers.get("Content-Length") or 0)
+                if n <= 0:
+                    return self._json({"error": "empty upload"}, 400)
+                snd = os.path.join(ws.root, "sound")
+                shutil.rmtree(snd, ignore_errors=True)
+                os.makedirs(snd, exist_ok=True)
+                dest = os.path.join(snd, re.sub(r"[^A-Za-z0-9._-]+", "_", name))
+                left = n
+                with open(dest, "wb") as f:
+                    while left > 0:
+                        chunk = self.rfile.read(min(1 << 20, left))
+                        if not chunk:
+                            break
+                        f.write(chunk)
+                        left -= len(chunk)
+                with ws.lock:
+                    ws.proj["bed"] = "custom"
+                    ws.save()
+                return self._json(ws.public_state())
             if u.path != "/api/upload":
                 return self._json({"error": "not found"}, 404)
             name = parse_qs(u.query).get("name", ["clip.mov"])[0]
@@ -1380,7 +1567,7 @@ def make_handler(ws: Workspace, job: RenderJob):
                 if p == "/api/clip/update":
                     clip = self._clip(data.get("id", ""))
                     with ws.lock:
-                        for k in ("start", "end", "effect", "scare_at", "new_night", "name"):
+                        for k in ("start", "end", "effect", "scare_at", "new_night", "name", "in_trailer"):
                             if k in data:
                                 clip[k] = data[k]
                         ws.save()
@@ -1413,6 +1600,20 @@ def make_handler(ws: Workspace, job: RenderJob):
                     def work(progress):
                         Renderer(proj, ws.root, progress).run(out)
                         return "/files/output/" + os.path.basename(out)
+
+                    job.start(work)
+                    return self._json(job.status())
+                if p == "/api/sound/clear":
+                    shutil.rmtree(os.path.join(ws.root, "sound"), ignore_errors=True)
+                    return self._json(ws.public_state())
+                if p == "/api/listen":
+                    proj = json.loads(json.dumps(ws.proj))
+                    dest = os.path.join(ws.previews_dir, f"bed_{int(time.time())}.m4a")
+
+                    def work(progress):
+                        progress(0.1, "Rendering the sound bed…")
+                        Renderer(proj, ws.root, progress).preview_bed(dest)
+                        return "/files/previews/" + os.path.basename(dest)
 
                     job.start(work)
                     return self._json(job.status())

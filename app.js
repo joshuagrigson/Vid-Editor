@@ -32,7 +32,79 @@ export function defaultProject() {
     nights_mode: "per_clip", timestamps: true, drone: 0.55, end_card: true, start_date: "",
     output_name: "", seed: Math.floor(Math.random() * 999999) + 1,
     trailer_length: "60", trailer_taglines: "",
+    // sound bed (movie and trailer): drone | heartbeat | wind | musicbox | hum | none | custom
+    bed: "drone",
+    card_font: "serif",             // serif | mono | bold
+    // trailer
+    trailer_pace: "classic",        // slow | classic | relentless
+    trailer_pick: "auto",           // auto | markers
+    trailer_booms: true, trailer_static: true, trailer_flash: true, trailer_shake: true,
+    trailer_slowmo: true, trailer_posttitle: true, trailer_bw: false,
+    trailer_words: "", trailer_dateline: "",
   };
+}
+
+export const BEDS = {
+  drone: { name: "Dread Drone", blurb: "Low, slow, unsettling. The classic found-footage bed." },
+  heartbeat: { name: "Heartbeat", blurb: "A slow, heavy pulse with a faint hum underneath." },
+  wind: { name: "Wind & Whispers", blurb: "Air moving through an empty house, with something almost like a voice." },
+  musicbox: { name: "Music Box", blurb: "A detuned lullaby echoing down a hallway." },
+  hum: { name: "Electrical Hum", blurb: "Mains buzz, tape hiss and the odd crackle. Security-camera cold." },
+  none: { name: "Silence", blurb: "No bed. Just the footage, the hits and the stingers." },
+  custom: { name: "Your own sound", blurb: "Upload an mp3, m4a or wav. Looped or trimmed to fit, faded in and out." },
+};
+export const PACES = {
+  slow: { name: "Slow burn", setup: 3.0, esc: 1.9, mont: 1.0, count: 0.8 },
+  classic: { name: "Classic", setup: 2.4, esc: 1.5, mont: 0.8, count: 1.0 },
+  relentless: { name: "Relentless", setup: 1.8, esc: 1.1, mont: 0.55, count: 1.35 },
+};
+
+// Sound beds are synthesized in the final mix. Returns filtergraph lines ending in [bed], or null for none.
+// `soundIn` is the input index of an uploaded sound file when kind === "custom".
+export function bedGraph(kind, total, gain, soundIn = null) {
+  const g = Math.max(0, gain);
+  if (kind === "none" || g <= 0) return null;
+  const tail = `,afade=t=in:st=0:d=3,afade=t=out:st=${f3(Math.max(0, total - 4))}:d=4`;
+  if (kind === "custom") {
+    if (soundIn == null) return null;
+    return [`[${soundIn}:a]aresample=${AR},aformat=sample_fmts=fltp:channel_layouts=stereo,atrim=duration=${f3(total)},volume=${f3(1.0 * g)}${tail}[bed]`];
+  }
+  if (kind === "heartbeat") {
+    // two-part thump every 0.95 s (lub-dub), sub-heavy, with a faint hum
+    return [
+      `aevalsrc=exprs='0.9*sin(2*PI*52*t)*exp(-11*mod(t,0.95))+0.55*sin(2*PI*46*t)*exp(-12*mod(t-0.2,0.95))*gte(mod(t,0.95),0.2)+0.06*sin(2*PI*38*t)':s=${AR},aformat=channel_layouts=stereo,lowpass=f=140,volume=${f3(0.55 * g)}${tail}[bed]`,
+    ];
+  }
+  if (kind === "wind") {
+    return [
+      `anoisesrc=color=brown:amplitude=0.8:r=${AR},aformat=channel_layouts=stereo,highpass=f=70,lowpass=f=900,volume='if(isnan(t),0.55,0.55+0.45*sin(2*PI*0.09*t))':eval=frame[w1]`,
+      `aevalsrc=exprs='0.07*sin(2*PI*(520+40*sin(2*PI*0.21*t))*t)*(0.5+0.5*sin(2*PI*0.05*t+1))+0.05*sin(2*PI*(310+25*sin(2*PI*0.17*t))*t)*(0.5+0.5*sin(2*PI*0.037*t))':s=${AR},aformat=channel_layouts=stereo[w2]`,
+      `[w1][w2]amix=inputs=2:normalize=0,volume=${f3(0.85 * g)}${tail}[bed]`,
+    ];
+  }
+  if (kind === "musicbox") {
+    // eight-note minor lullaby, one note per 0.55 s, bell-like partials, echoed
+    const n = "mod(floor(t/0.55),8)";
+    const f = `if(eq(${n},0),659.3,if(eq(${n},1),587.3,if(eq(${n},2),523.3,if(eq(${n},3),587.3,if(eq(${n},4),659.3,if(eq(${n},5),659.3,if(eq(${n},6),659.3,0)))))))`;
+    const env = "exp(-4.5*mod(t,0.55))";
+    return [
+      `aevalsrc=exprs='(sin(2*PI*${f}*t)+0.45*sin(2*PI*${f}*2.01*t)+0.2*sin(2*PI*${f}*3.02*t))*${env}*0.35':s=${AR},aformat=channel_layouts=stereo,aecho=0.8:0.55:180|340:0.35|0.2,lowpass=f=4500,volume=${f3(1.5 * g)}${tail}[bed]`,
+    ];
+  }
+  if (kind === "hum") {
+    return [
+      `aevalsrc=exprs='0.5*sin(2*PI*60*t)+0.18*sin(2*PI*120*t)+0.08*sin(2*PI*180*t)':s=${AR},aformat=channel_layouts=stereo[h1]`,
+      `anoisesrc=color=white:amplitude=0.12:r=${AR},aformat=channel_layouts=stereo,highpass=f=2500[h2]`,
+      `aevalsrc=exprs='0.8*(random(0)-0.5)*gt(random(1),0.9993)':s=${AR},aformat=channel_layouts=stereo,lowpass=f=6000[h3]`,
+      `[h1][h2][h3]amix=inputs=3:normalize=0,volume=${f3(0.35 * g)}${tail}[bed]`,
+    ];
+  }
+  // drone (default)
+  return [
+    `aevalsrc=exprs='0.55*sin(2*PI*46*t)*(0.75+0.25*sin(2*PI*0.11*t))+0.35*sin(2*PI*47.6*t)+0.22*sin(2*PI*92*t)*(0.5+0.5*sin(2*PI*0.07*t+1))+0.18*sin(2*PI*138.5*t)*(0.5+0.5*sin(2*PI*0.05*t+2))':s=${AR},aformat=channel_layouts=stereo[dr1]`,
+    `anoisesrc=color=brown:amplitude=0.6:r=${AR},aformat=channel_layouts=stereo,lowpass=f=300[dr2]`,
+    `[dr1][dr2]amix=inputs=2:normalize=0,volume=${f3(0.30 * g)}${tail}[bed]`,
+  ];
 }
 
 // --------------------------------------------------------------------------
@@ -228,6 +300,7 @@ export class Engine {
 export function safeName(name) {
   return name.replace(/[^A-Za-z0-9._-]+/g, "_").slice(-80) || "clip.mov";
 }
+const extOf = name => { const m = /\.[A-Za-z0-9]{1,5}$/.exec(name || ""); return m ? m[0].toLowerCase() : ".mp3"; };
 
 // --------------------------------------------------------------------------
 // Canvas text rendering (cards, typewriter frames, camcorder clock overlays)
@@ -237,7 +310,9 @@ const FONT = {
   mono: '"Courier New", "Lucida Console", Menlo, Monaco, Consolas, "DejaVu Sans Mono", monospace',
   serif: '"Times New Roman", Times, Georgia, "DejaVu Serif", serif',
   sans: 'Arial, Helvetica, "Segoe UI", sans-serif',
+  bold: 'Impact, "Arial Black", "Helvetica Neue", Arial, sans-serif',
 };
+const fontCss = (kind, size) => `${kind === "bold" ? "bold " : ""}${size}px ${FONT[kind] || FONT.serif}`;
 
 function canvasToPng(c) {
   return new Promise((res, rej) => c.toBlob(b => b ? b.arrayBuffer().then(ab => res(new Uint8Array(ab))) : rej(new Error("PNG encode failed")), "image/png"));
@@ -279,8 +354,8 @@ export async function makeCard(W, H, { title = "", subtitle = "", body = "", tit
   const white = "rgb(235,235,235)", grey = "rgb(160,160,160)";
   const blocks = []; // {font, size, text, spacing, fill, gap, body}
   if (title) {
-    const size = Math.round(H * titleScale); ctx.font = `${size}px ${FONT[titleKind]}`;
-    const sp = size * 0.18;
+    const size = Math.round(H * titleScale); ctx.font = fontCss(titleKind, size);
+    const sp = size * (titleKind === "bold" ? 0.08 : 0.18);
     for (const ln of wrapText(ctx, title.toUpperCase(), W * 0.86, sp)) blocks.push({ font: ctx.font, size, text: ln, spacing: sp, fill: white, gap: 30 * S, body: false });
   }
   if (subtitle) {
@@ -489,8 +564,10 @@ export function clipParts(duration) {
 }
 
 export class Renderer {
-  constructor(eng, proj, clips, progress = () => {}, { resume = null, onSegment = null, onStall = null } = {}) {
+  constructor(eng, proj, clips, progress = () => {}, { resume = null, onSegment = null, onStall = null, sound = null } = {}) {
     this.eng = eng; this.p = proj; this.clips = clips; this.progress = progress;
+    this.sound = sound;          // uploaded audio File for the "custom" sound bed
+    this.font = proj.card_font || "serif";
     [this.W, this.H] = chooseCanvas(proj, clips);
     this.segments = []; // {name, blob, duration}
     this.totalWork = 1; this.doneWork = 0;
@@ -521,13 +598,17 @@ export class Renderer {
   async push(name, dur) { this.segments.push({ name: name + ".mp4", blob: await this.eng.take(name + ".mp4"), duration: dur }); }
 
   // slam: no fade-in, a two-frame white flash and a slow push-in instead (trailer cards). boom: a sub hit on entry.
-  async renderCard(name, png, duration, fadeIn = 0.8, fadeOut = 0.7, label = "Title card", { slam = false, boom = false } = {}) {
+  async renderCard(name, png, duration, fadeIn = 0.8, fadeOut = 0.7, label = "Title card", { slam = false, boom = false, plain = false } = {}) {
     await this.eng.ff.writeFile(name + ".png", png);
     const W = this.W, H = this.H;
-    let vf = slam
-      ? `scale=w='trunc(iw*(1+0.05*t/${f3(duration)})/2)*2':h='trunc(ih*(1+0.05*t/${f3(duration)})/2)*2':eval=frame,crop=${W}:${H},eq=brightness=0.7:enable='lt(t,0.07)',`
-      : `fade=t=in:st=0:d=${fadeIn},`;
-    vf += `fade=t=out:st=${f3(duration - fadeOut)}:d=${fadeOut},noise=alls=7:allf=t,eq=brightness='0.012*sin(t*31)':eval=frame,format=yuv420p`;
+    let vf;
+    if (plain) vf = "noise=alls=10:allf=t,format=yuv420p";   // a flash word: no fades, on and gone
+    else {
+      vf = slam
+        ? `scale=w='trunc(iw*(1+0.05*t/${f3(duration)})/2)*2':h='trunc(ih*(1+0.05*t/${f3(duration)})/2)*2':eval=frame,crop=${W}:${H},eq=brightness=0.7:enable='lt(t,0.07)',`
+        : `fade=t=in:st=0:d=${fadeIn},`;
+      vf += `fade=t=out:st=${f3(duration - fadeOut)}:d=${fadeOut},noise=alls=7:allf=t,eq=brightness='0.012*sin(t*31)':eval=frame,format=yuv420p`;
+    }
     const audio = boom ? `${BOOM},apad` : `anullsrc=r=${AR}:cl=stereo`;
     const w = duration * 0.25;
     await this.eng.exec(["-loop", "1", "-framerate", String(FPS), "-threads", "1", "-i", name + ".png", "-f", "lavfi", "-threads", "1", "-i", audio,
@@ -584,11 +665,17 @@ export class Renderer {
       const inputs = ["-ss", f3(plan.start + part.start), "-i", `/in/${safe}`];
       let nIn = 1;
       const graph = [];
+      const slowmo = opts.slowmo && opts.slowmo > 1 ? opts.slowmo : 0;
       let pre = `[0:v]fps=${FPS},`;
+      if (slowmo) pre += `setpts=${f3(slowmo)}*PTS,fps=${FPS},`;
       if (meta.hdr) pre += hdrChain(eng, meta.hdr) + ",";
       graph.push(pre + fitChain(eng, meta.width, meta.height, W, H));
       let cur = "[base]";
-      graph.push(`${cur}${styleVideoChain(eng, style, W, H)}[fx]`); cur = "[fx]";
+      let fx = styleVideoChain(eng, style, W, H);
+      if (opts.bw) fx += ",hue=s=0";
+      if (opts.negate) fx += ",negate";
+      if (opts.shake) fx += `,scale=w='trunc(iw*1.04/2)*2':h='trunc(ih*1.04/2)*2',crop=${W}:${H}:x='(iw-${W})/2+0.02*iw*sin(t*97)*exp(-6*t)':y='(ih-${H})/2+0.02*ih*sin(t*83)*exp(-6*t)'`;
+      graph.push(`${cur}${fx}[fx]`); cur = "[fx]";
 
       // jump scare time is relative to the trimmed clip; keep it only if it lands inside this part
       let T;
@@ -629,7 +716,7 @@ export class Renderer {
 
       let asrc = "[0:a]";
       if (!meta.has_audio) { inputs.push("-f", "lavfi", "-i", `anullsrc=r=${AR}:cl=stereo`); asrc = `[${nIn}:a]`; nIn++; }
-      let a = `${asrc}aresample=${AR},aformat=sample_fmts=fltp:channel_layouts=stereo,${styleAudioChain(style)}`;
+      let a = `${asrc}aresample=${AR},aformat=sample_fmts=fltp:channel_layouts=stereo,${slowmo ? `atempo=${f3(1 / slowmo)},` : ""}${styleAudioChain(style)}`;
       if (T != null) {
         a += `,volume=0.12:enable='between(t,${f3(Math.max(0, T - 0.8))},${f3(T - 0.02)})'[a1];` + jumpScareAudioSource(T, "[sting]") + ";" +
              "[a1][sting]amix=inputs=2:duration=first:normalize=0,alimiter=limit=0.97";
@@ -656,24 +743,30 @@ export class Renderer {
   }
 
   // opts.riser = {at, dur}: a rising shriek/noise sweep mixed in over that stretch (trailer montage).
-  // opts.droneGain scales the drone; opts.quiet = [{at, dur}] stretches where the drone is pulled down (silence before the hit).
+  // opts.droneGain scales the bed; opts.quiet = [{at, dur}] stretches where the bed is pulled down (silence before the hit).
+  // opts.sound: an uploaded File used when the bed is "custom".
   async renderFinal(outName, opts = {}) {
     const total = this.segments.reduce((a, s) => a + s.duration, 0);
     const files = this.segments.map(s => new File([s.blob], s.name, { type: "video/mp4" }));
     await this.eng.mountFiles(files, "/segs");
+    const kind = this.p.bed || "drone";
+    const sound = kind === "custom" && opts.sound ? opts.sound : null;
+    if (sound) await this.eng.mountFiles([new File([sound], "bed" + extOf(sound.name))], "/snd");
     try {
       let list = "ffconcat version 1.0\n";
       for (const s of this.segments) list += `file '/segs/${s.name}'\nduration ${f3(s.duration)}\n`;
       await this.eng.ff.writeFile("concat.txt", list);
+      const inputs = ["-f", "concat", "-safe", "0", "-i", "concat.txt"];
+      if (sound) inputs.push("-stream_loop", "-1", "-threads", "1", "-i", "/snd/bed" + extOf(sound.name));
       const graph = [];
-      const drone = (+this.p.drone || 0) * (opts.droneGain || 1);
+      const gain = (+this.p.drone || 0) * (opts.droneGain || 1);
       let acur = "[0:a]";
-      if (drone > 0) {
+      const bed = bedGraph(kind, total, gain, sound ? 1 : null);
+      if (bed) {
         const quiet = (opts.quiet || []).map(q => `,volume=0.05:enable='between(t,${f3(q.at)},${f3(q.at + q.dur)})'`).join("");
-        graph.push(`aevalsrc=exprs='0.55*sin(2*PI*46*t)*(0.75+0.25*sin(2*PI*0.11*t))+0.35*sin(2*PI*47.6*t)+0.22*sin(2*PI*92*t)*(0.5+0.5*sin(2*PI*0.07*t+1))+0.18*sin(2*PI*138.5*t)*(0.5+0.5*sin(2*PI*0.05*t+2))':s=${AR},aformat=channel_layouts=stereo[dr1]`);
-        graph.push(`anoisesrc=color=brown:amplitude=0.6:r=${AR},aformat=channel_layouts=stereo,lowpass=f=300[dr2]`);
-        graph.push(`[dr1][dr2]amix=inputs=2:normalize=0,volume=${f3(0.30 * drone)}${quiet},afade=t=in:st=0:d=3,afade=t=out:st=${f3(Math.max(0, total - 4))}:d=4[drone]`);
-        graph.push("[0:a][drone]amix=inputs=2:duration=first:normalize=0[amix]"); acur = "[amix]";
+        graph.push(...bed.slice(0, -1));
+        graph.push(bed[bed.length - 1].replace(/\[bed\]$/, quiet ? `${quiet}[bed]` : "[bed]"));
+        graph.push("[0:a][bed]amix=inputs=2:duration=first:normalize=0[amix]"); acur = "[amix]";
       }
       if (opts.riser && opts.riser.dur > 1) {
         const Dr = f3(opts.riser.dur);
@@ -683,13 +776,31 @@ export class Renderer {
       graph.push(`${acur}alimiter=limit=0.95,afade=t=out:st=${f3(Math.max(0, total - 1.5))}:d=1.5[aout]`);
       await this.eng.ff.writeFile("final.txt", graph.join(";\n") + "\n");
       const w = total * 0.08;
-      await this.eng.exec(["-f", "concat", "-safe", "0", "-i", "concat.txt", "-filter_complex_script", "final.txt", "-map", "0:v", "-map", "[aout]",
+      await this.eng.exec([...inputs, "-filter_complex_script", "final.txt", "-map", "0:v", "-map", "[aout]",
         "-t", f3(total), "-c:v", "copy", "-c:a", "aac", "-b:a", "160k", "-ar", String(AR), "-ac", "2", "-movflags", "+faststart", outName],
         total, this.job(w, "Final assembly"), "final assembly");
       this.finish(w);
       for (const f of ["concat.txt", "final.txt"]) try { await this.eng.ff.deleteFile(f); } catch (_) {}
       return await this.eng.take(outName);
-    } finally { await this.eng.unmount("/segs"); }
+    } finally { await this.eng.unmount("/segs"); if (sound) await this.eng.unmount("/snd"); }
+  }
+
+  // Six seconds of the chosen sound bed, for auditioning. Returns an audio Blob (m4a).
+  async previewBed(kind, gain, sound) {
+    const s = kind === "custom" && sound ? sound : null;
+    if (s) await this.eng.mountFiles([new File([s], "bed" + extOf(s.name))], "/snd");
+    try {
+      const inputs = s ? ["-stream_loop", "-1", "-threads", "1", "-i", "/snd/bed" + extOf(s.name)] : ["-f", "lavfi", "-i", `anullsrc=r=${AR}:cl=stereo`];
+      const bed = bedGraph(kind, 6, Math.max(0.2, gain), s ? 0 : null);
+      if (!bed) throw new Error("Silence has nothing to listen to.");
+      const graph = [...bed.slice(0, -1), bed[bed.length - 1].replace(/,afade=t=in[^\[]*\[bed\]$/, ",afade=t=out:st=5.3:d=0.7[bed]")];
+      await this.eng.ff.writeFile("bed.txt", graph.join(";\n") + "\n");
+      await this.eng.exec([...inputs, "-filter_complex_script", "bed.txt", "-map", "[bed]", "-t", "6", "-c:a", "aac", "-b:a", "128k", "bed.m4a"], 6, null, "sound preview");
+      try { await this.eng.ff.deleteFile("bed.txt"); } catch (_) {}
+      const data = await this.eng.ff.readFile("bed.m4a");
+      try { await this.eng.ff.deleteFile("bed.m4a"); } catch (_) {}
+      return new Blob([data], { type: "audio/mp4" });
+    } finally { if (s) await this.eng.unmount("/snd"); }
   }
 
   estimateWork(plan) {
@@ -707,7 +818,7 @@ export class Renderer {
     if (p.title_card) {
       await S("black_open", 0, () => this.renderBlack("black_open", 1.2));
       await S("intro", 2.5, () => this.renderTypewriter("intro", introTextFor(p)));
-      await S("title", 1, async () => this.renderCard("title", await makeCard(this.W, this.H, { title: p.title || "UNTITLED", subtitle: p.subtitle || "", titleScale: (p.title || "").length < 22 ? 0.085 : 0.06 }), 4.0, 1.6, 0.3, "Title card"));
+      await S("title", 1, async () => this.renderCard("title", await makeCard(this.W, this.H, { title: p.title || "UNTITLED", subtitle: p.subtitle || "", titleKind: this.font, titleScale: (p.title || "").length < 22 ? 0.085 : 0.06 }), 4.0, 1.6, 0.3, "Title card"));
       await S("black_after_title", 0, () => this.renderBlack("black_after_title", 0.8));
     }
     for (let i = 0; i < this.clips.length; i++) {
@@ -733,7 +844,7 @@ export class Renderer {
       await S("black_final", 0, () => this.renderBlack("black_final", 1.0));
     }
     let blob;
-    try { blob = await this.renderFinal("movie.mp4"); }
+    try { blob = await this.renderFinal("movie.mp4", { sound: this.sound }); }
     catch (e) { if (e.stalled && this.onStall) await this.onStall(e); throw e; }
     this.segments = [];
     this.progress(1, "Done");
@@ -768,27 +879,31 @@ export class Renderer {
     this.totalWork = this.estimateTrailerWork(tp); this.segments = [];
     const S = (name, weight, fn) => this.seg(name, weight, fn);
     let at = 0, riser = null, quiet = [];
+    const o = tp.opts || {};
     for (let k = 0; k < tp.items.length; k++) {
       const it = tp.items[k], nm = `tr${String(k).padStart(2, "0")}_${it.type}`;
       if (it.type === "black") { await S(nm, 0, () => this.renderBlack(nm, it.dur)); if (it.quiet) quiet.push({ at, dur: it.dur }); }
       else if (it.type === "static") await S(nm, 0, () => this.renderStatic(nm, it.dur));
-      else if (it.type === "card") {
+      else if (it.type === "word") {
+        await S(nm, 0, async () => this.renderCard(nm, await makeCard(this.W, this.H, { title: it.text, titleKind: "bold", titleScale: 0.11 }), it.dur, 0, 0, `Word: ${it.text}`, { plain: true }));
+      } else if (it.type === "card") {
         await S(nm, it.dur * 0.25, async () => this.renderCard(nm, await makeCard(this.W, this.H, {
-          title: it.title || "", subtitle: it.subtitle || "", titleScale: it.big ? ((it.title || "").length < 22 ? 0.085 : 0.06) : 0.05,
-        }), it.dur, 0.8, it.fadeOut ?? 0.4, it.big ? "Title card" : `Card: ${it.title}`, { slam: true, boom: true }));
+          title: it.title || "", subtitle: it.subtitle || "", titleKind: this.font, titleScale: it.big ? ((it.title || "").length < 22 ? 0.085 : 0.06) : 0.05,
+        }), it.dur, 0.8, it.fadeOut ?? 0.4, it.big ? "Title card" : `Card: ${it.title}`, { slam: true, boom: o.booms !== false }));
       } else if (it.type === "moment") {
         const clip = this.clips[it.clip], pl = plans[it.clip];
         const part = { i: 0, start: it.start, dur: it.dur, first: true, last: true };
         if (it.riser) riser = riser ? { at: riser.at, dur: at + it.dur - riser.at } : { at, dur: it.dur };
         await S(nm, it.dur * (clip.meta.hdr ? 3 : 1), () => this.renderClip(it.clip, clip, pl, part, {
-          name: nm, transition: it.transition || "cut", fade: 0.35, flash: !!it.flash, boom: !!it.boom,
+          name: nm, transition: it.transition || "cut", fade: 0.35, flash: !!it.flash, boom: !!it.boom, shake: !!it.shake,
+          slowmo: it.slowmo || 0, negate: !!it.negate, bw: !!o.bw,
           scareT: it.scare ? Math.min(it.dur - 0.4, it.scare) : null, label: ` (trailer moment ${k + 1} of ${tp.items.length})`,
         }));
       }
       at += it.dur;
     }
     let blob;
-    try { blob = await this.renderFinal("trailer.mp4", { riser, quiet, droneGain: 1.35 }); }
+    try { blob = await this.renderFinal("trailer.mp4", { riser, quiet, droneGain: 1.35, sound: this.sound }); }
     catch (e) { if (e.stalled && this.onStall) await this.onStall(e); throw e; }
     this.segments = [];
     this.progress(1, "Done");
@@ -804,13 +919,24 @@ export const TRAILER_LENGTHS = { 45: { setup: 2, esc: 4, montage: 6 }, 60: { set
 export const DEFAULT_TAGLINES = "THIS HALLOWEEN\nSOMETHING IS IN THE HOUSE\nNO ONE WILL BELIEVE THEM\nCOMING SOON";
 
 // analyses: {clipIdx -> [{t, db}]} with t relative to the trimmed clip start. Deterministic given the seed.
+// Options come from the project: trailer_pace, trailer_pick, trailer_booms/static/flash/shake/slowmo/posttitle/bw,
+// trailer_words, trailer_dateline; clips with in_trailer === false are left out.
 export function planTrailer(proj, clips, analyses, length = 60) {
-  const counts = TRAILER_LENGTHS[length] || TRAILER_LENGTHS[60];
+  const base = TRAILER_LENGTHS[length] || TRAILER_LENGTHS[60];
+  const pace = PACES[proj.trailer_pace] || PACES.classic;
+  const counts = { setup: Math.max(1, Math.round(base.setup * pace.count)), esc: Math.max(2, Math.round(base.esc * pace.count)), montage: Math.max(3, Math.round(base.montage * pace.count)) };
+  const o = {
+    booms: proj.trailer_booms !== false, static: proj.trailer_static !== false, flash: proj.trailer_flash !== false,
+    shake: proj.trailer_shake !== false, slowmo: proj.trailer_slowmo !== false ? 1.6 : 0, posttitle: proj.trailer_posttitle !== false,
+    bw: !!proj.trailer_bw, markers: proj.trailer_pick === "markers", pace: proj.trailer_pace || "classic",
+  };
   const plans = planNights(proj, clips);
   const rnd = mulberry((+proj.seed || 1) + 77);
+  const included = clips.map((c, i) => i).filter(i => clips[i].in_trailer !== false);
+  const use = included.length ? included : clips.map((c, i) => i);
   // score every half-second window: loudness plus how much louder it is than the seconds before it
   const wins = [];
-  clips.forEach((c, ci) => {
+  for (const ci of use) {
     const dur = plans[ci].duration;
     let a = (analyses[ci] || []).filter(w => w.t >= 0 && w.t <= dur);
     if (a.length < 4) a = Array.from({ length: Math.floor(dur * 2) }, (_, i) => ({ t: i / 2, db: -40 + rnd() * 6 }));
@@ -822,41 +948,45 @@ export function planTrailer(proj, clips, analyses, length = 60) {
       const loud = (w.db - lo) / span, jump = Math.max(0, w.db - before) / span;
       wins.push({ clip: ci, t: w.t, db: w.db, score: 0.55 * loud + 0.45 * Math.min(1, jump * 2) + rnd() * 0.02, dur });
     });
-  });
+    // a jump-scare mark the user placed is a candidate too; with "markers" it outranks everything measured
+    const m = clips[ci].scare_at;
+    if (m != null && m !== "" && !isNaN(+m) && +m >= 0 && +m <= dur) wins.push({ clip: ci, t: +m, db: 0, score: o.markers ? 2 + rnd() * 0.01 : 0.9 + rnd() * 0.05, dur, marked: true });
+  }
   const taken = [];
   // how far apart picks must be within one clip: generous with lots of footage, tight with little
-  const totalDur = plans.reduce((s, pl) => s + pl.duration, 0);
+  const totalDur = use.reduce((s, ci) => s + plans[ci].duration, 0);
   const wanted = counts.setup + counts.esc + counts.montage + 1;
   const GAP = Math.max(1.2, Math.min(6, totalDur / (wanted * 2.5)));
   const free = (w, gap = GAP) => !taken.some(x => x.clip === w.clip && Math.abs(x.t - w.t) < gap);
   const fit = (w, lead, len) => w.t - lead >= 0 && w.t - lead + len <= w.dur;
 
-  // the big one: the single most striking moment, with a lead-in so the hit lands 1.4 s in
+  // the big one: the single most striking moment, with a lead-in so the hit lands 1.4 s in (source time shrinks under slow motion)
+  const sm = o.slowmo || 1;
+  const finLead = 1.4 / sm, finLen = 2.4 / sm;
   const byScore = [...wins].sort((a, b) => b.score - a.score);
-  let finale = byScore.find(w => fit(w, 1.4, 2.4)) || byScore[0];
+  let finale = byScore.find(w => fit(w, finLead, finLen)) || byScore[0];
   if (finale) taken.push(finale);
 
-  const pick = (n, len, lead, minScore) => {
+  const pick = (n, len, lead) => {
     const out = [], perClip = {};
-    const cap = Math.ceil(n / Math.max(1, clips.length)) + 1;
+    const cap = Math.ceil(n / Math.max(1, use.length)) + 1;
     for (const w of byScore) {
       if (out.length >= n) break;
       if (w === finale || !free(w) || !fit(w, lead, len)) continue;
       if ((perClip[w.clip] || 0) >= cap) continue;
-      if (minScore != null && w.score < minScore) continue;
       out.push(w); taken.push(w); perClip[w.clip] = (perClip[w.clip] || 0) + 1;
     }
     return out;
   };
-  const esc = pick(counts.esc, 1.5, 0.6);
-  const montage = pick(counts.montage, 0.8, 0.3);
+  const esc = pick(counts.esc, pace.esc, Math.min(0.6, pace.esc * 0.4));
+  const montage = pick(counts.montage, pace.mont, Math.min(0.3, pace.mont * 0.35));
   // setup: quiet, early stretches, one per clip where possible
   const setup = [];
-  const quietSorted = [...wins].sort((a, b) => a.score - b.score);
+  const quietSorted = [...wins].filter(w => !w.marked).sort((a, b) => a.score - b.score);
   for (const w of quietSorted) {
     if (setup.length >= counts.setup) break;
-    if (w.t > w.dur * 0.6 || !fit(w, 0, 2.4) || !free(w)) continue;
-    if (setup.some(s => s.clip === w.clip) && setup.length < clips.length) continue;
+    if (w.t > w.dur * 0.6 || !fit(w, 0, pace.setup) || !free(w)) continue;
+    if (setup.some(s => s.clip === w.clip) && setup.length < use.length) continue;
     setup.push(w); taken.push(w);
   }
   const chrono = arr => arr.sort((a, b) => a.clip - b.clip || a.t - b.t);
@@ -867,19 +997,31 @@ export function planTrailer(proj, clips, analyses, length = 60) {
   while (more) { more = false; for (const k of Object.keys(byClip)) { const w = byClip[k].shift(); if (w) { mont.push(w); more = true; } } }
 
   const tags = (proj.trailer_taglines || DEFAULT_TAGLINES).split("\n").map(s => s.trim()).filter(Boolean);
+  const words = (proj.trailer_words || "").split("\n").map(s => s.trim()).filter(Boolean);
   const items = [];
   items.push({ type: "black", dur: 1.0 });
   if (tags[0]) items.push({ type: "card", title: tags[0], dur: 1.9 });
-  setup.forEach(w => items.push({ type: "moment", clip: w.clip, start: w.t, dur: 2.4, transition: "black" }));
+  setup.forEach(w => items.push({ type: "moment", clip: w.clip, start: w.t, dur: pace.setup, transition: "black" }));
   if (tags[1]) items.push({ type: "card", title: tags[1], dur: 1.9 });
-  esc.forEach((w, i) => { if (i > 0) items.push({ type: "static", dur: 0.14 }); items.push({ type: "moment", clip: w.clip, start: w.t - 0.6, dur: 1.5, boom: true }); });
+  esc.forEach((w, i) => {
+    if (i > 0 && o.static) items.push({ type: "static", dur: 0.14 });
+    items.push({ type: "moment", clip: w.clip, start: w.t - Math.min(0.6, pace.esc * 0.4), dur: pace.esc, boom: o.booms, shake: o.shake });
+  });
   if (tags[2]) items.push({ type: "card", title: tags[2], dur: 1.9 });
-  mont.forEach(w => items.push({ type: "moment", clip: w.clip, start: w.t - 0.3, dur: 0.8, flash: true, riser: true }));
+  mont.forEach((w, i) => {
+    items.push({ type: "moment", clip: w.clip, start: w.t - Math.min(0.3, pace.mont * 0.35), dur: pace.mont, flash: o.flash, riser: true });
+    if (words.length && i % 2 === 1 && i < mont.length - 1) items.push({ type: "word", text: words[Math.floor(i / 2) % words.length], dur: 0.12 });
+  });
   items.push({ type: "black", dur: 0.9, quiet: true });
-  if (finale) items.push({ type: "moment", clip: finale.clip, start: Math.max(0, finale.t - 1.4), dur: 2.4, scare: 1.4 });
+  if (finale) items.push({ type: "moment", clip: finale.clip, start: Math.max(0, finale.t - finLead), dur: 2.4, scare: 1.4, slowmo: o.slowmo, boom: o.booms });
   items.push({ type: "static", dur: 0.2 });
-  items.push({ type: "card", title: proj.title || "UNTITLED", subtitle: proj.subtitle || "", dur: 3.4, big: true, fadeOut: 0.7 });
+  const dateline = (proj.trailer_dateline || "").trim();
+  items.push({ type: "card", title: proj.title || "UNTITLED", subtitle: [proj.subtitle || "", dateline].filter(Boolean).join("   ·   "), dur: 3.4, big: true, fadeOut: 0.7 });
   if (tags[3]) items.push({ type: "card", title: tags[3], dur: 2.0, fadeOut: 0.8 });
+  if (o.posttitle && finale) {
+    items.push({ type: "black", dur: 0.7, quiet: true });
+    items.push({ type: "moment", clip: finale.clip, start: Math.max(0, finale.t - 0.1), dur: 0.35, negate: true, boom: o.booms, flash: true });
+  }
   items.push({ type: "black", dur: 1.0 });
-  return { length, items, total: items.reduce((s, it) => s + it.dur, 0) };
+  return { length, opts: o, items, total: items.reduce((s, it) => s + it.dur, 0) };
 }

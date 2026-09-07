@@ -53,6 +53,8 @@
   .look small { color: var(--muted); }
   .look input { display: none; }
   .range { display: flex; align-items: center; gap: 10px; }
+  .ctlgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 10px; margin: 6px 0; }
+  .ctlgrid .check { font-size: 13px; margin: 5px 0; }
   .range input { flex: 1; accent-color: var(--accent); }
   .drop { border: 2px dashed #3a3a4a; border-radius: 12px; padding: 26px; text-align: center; color: var(--muted);
           cursor: pointer; transition: .15s; background: #0f0f14; }
@@ -132,8 +134,11 @@
         <option value="single">One long night</option>
         <option value="manual">I’ll mark where each night starts</option>
       </select></label>
-      <label class="f">Dread drone volume
-        <div class="range"><input type="range" min="0" max="1" step="0.05" data-k="drone"><span id="droneVal"></span></div></label>
+      <label class="f">Title font <select data-k="card_font">
+        <option value="serif">Classic serif</option>
+        <option value="mono">Typewriter</option>
+        <option value="bold">Bold poster</option>
+      </select></label>
       <label class="check"><input type="checkbox" data-k="title_card"> Opening text + title card</label>
       <label class="check"><input type="checkbox" data-k="night_cards"> “NIGHT #1” cards</label>
       <label class="check"><input type="checkbox" data-k="timestamps"> Camcorder clock / REC overlay</label>
@@ -148,17 +153,52 @@
     </div>
 
     <div class="panel" style="margin-top:14px">
+      <h2>The sound</h2>
+      <div class="looks" id="beds"></div>
+      <div id="soundRow" class="row" style="display:none">
+        <input type="file" id="soundFile" accept="audio/*,.mp3,.m4a,.wav,.aac,.ogg,.flac" hidden>
+        <button id="soundPick">Choose a sound file…</button>
+        <span class="hint" id="soundName" style="flex:1;margin:0"></span>
+        <button class="ghost" id="soundClear" style="display:none">Remove</button>
+      </div>
+      <label class="f">Sound bed volume
+        <div class="range"><input type="range" min="0" max="1" step="0.05" data-k="drone"><span id="droneVal"></span></div></label>
+      <div class="row"><button id="listen">Listen to 6 seconds</button><audio id="bedAudio" controls style="display:none;height:32px;flex:1"></audio></div>
+    </div>
+
+    <div class="panel" style="margin-top:14px">
       <h2>The trailer</h2>
       <p class="hint" style="margin:0 0 8px">“Create trailer” listens to every clip for the loudest, most sudden moments (screams, bangs, doors),
         then cuts them into a trailer: quiet setup shots, escalating hits with static, a fast montage under a rising shriek, a silence, the
-        single scariest moment, and the title slamming in.</p>
+        single scariest moment, and the title slamming in. Untick “In trailer” on any clip to leave it out.</p>
       <label class="f">Length <select data-k="trailer_length">
         <option value="45">About 45 seconds</option>
         <option value="60">About 60 seconds</option>
         <option value="90">About 90 seconds</option>
       </select></label>
+      <label class="f">Pace <select data-k="trailer_pace">
+        <option value="slow">Slow burn: longer shots, more dread</option>
+        <option value="classic">Classic: setup, build, montage, hit</option>
+        <option value="relentless">Relentless: short, fast, more cuts</option>
+      </select></label>
+      <label class="f">Which moments <select data-k="trailer_pick">
+        <option value="auto">Auto: loudest and most sudden sounds</option>
+        <option value="markers">My jump-scare marks first, then auto</option>
+      </select></label>
+      <div class="ctlgrid">
+        <label class="check"><input type="checkbox" data-k="trailer_booms"> Sub-bass booms on hits</label>
+        <label class="check"><input type="checkbox" data-k="trailer_static"> TV static between hits</label>
+        <label class="check"><input type="checkbox" data-k="trailer_flash"> White flashes in the montage</label>
+        <label class="check"><input type="checkbox" data-k="trailer_shake"> Camera shake on hits</label>
+        <label class="check"><input type="checkbox" data-k="trailer_slowmo"> Slow-motion finale</label>
+        <label class="check"><input type="checkbox" data-k="trailer_posttitle"> Post-title jump</label>
+        <label class="check"><input type="checkbox" data-k="trailer_bw"> Black &amp; white</label>
+      </div>
       <label class="f">Taglines (one per line, in order: opening, mid, late, closing)
         <textarea data-k="trailer_taglines" placeholder="THIS HALLOWEEN&#10;SOMETHING IS IN THE HOUSE&#10;NO ONE WILL BELIEVE THEM&#10;COMING SOON"></textarea></label>
+      <label class="f">Date line under the title <input type="text" data-k="trailer_dateline" placeholder="OCTOBER 31"></label>
+      <label class="f">Flash words between montage shots (one per line, optional)
+        <textarea data-k="trailer_words" placeholder="RUN&#10;BEHIND YOU&#10;DON'T LOOK&#10;IT'S HERE"></textarea></label>
     </div>
   </aside>
 
@@ -206,7 +246,7 @@
 </div></div>
 
 <script type="module">
-import { Engine, Renderer, STYLES, TRANSITIONS, defaultProject, planNights, chooseCanvas, clipSpan, planTrailer } from "./app.js";
+import { Engine, Renderer, STYLES, TRANSITIONS, BEDS, defaultProject, planNights, chooseCanvas, clipSpan, planTrailer } from "./app.js";
 
 const $ = (s, r = document) => r.querySelector(s);
 const fmt = s => { s = Math.round(s); return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0"); };
@@ -248,7 +288,7 @@ function saveClips() {
   clearTimeout(saveClipsTimer);
   saveClipsTimer = setTimeout(() => {
     const rows = clips.filter(c => !c.pending).map(c => ({ id: c.id, file: c.file, name: c.name, meta: c.meta, thumbBlob: c.thumbBlob || null,
-      start: c.start, end: c.end, effect: c.effect, scare_at: c.scare_at, new_night: c.new_night }));
+      start: c.start, end: c.end, effect: c.effect, scare_at: c.scare_at, new_night: c.new_night, in_trailer: c.in_trailer !== false }));
     DB.set("kv", "clips", rows);
   }, 300);
 }
@@ -276,7 +316,9 @@ function fillSettings() {
     else if (document.activeElement !== el) el.value = state[k] ?? "";
   });
   $("#droneVal").textContent = Math.round((state.drone || 0) * 100) + "%";
-  document.querySelectorAll(".look").forEach(l => l.classList.toggle("on", l.dataset.v === state.style));
+  document.querySelectorAll(".look:not(.bed)").forEach(l => l.classList.toggle("on", l.dataset.v === state.style));
+  document.querySelectorAll(".look.bed").forEach(l => l.classList.toggle("on", l.dataset.v === (state.bed || "drone")));
+  showSound();
 }
 function buildLooks() {
   const box = $("#looks"); box.innerHTML = "";
@@ -288,7 +330,39 @@ function buildLooks() {
   }
   const t = $("[data-k=transition]"); t.innerHTML = "";
   for (const [k, v] of Object.entries(TRANSITIONS)) t.appendChild(new Option(v, k));
+  const bb = $("#beds"); bb.innerHTML = "";
+  for (const [k, s] of Object.entries(BEDS)) {
+    const l = document.createElement("label"); l.className = "look bed"; l.dataset.v = k;
+    l.innerHTML = `<input type="radio" name="bed" value="${k}"><b>${s.name}</b><small>${s.blurb}</small>`;
+    l.querySelector("input").addEventListener("change", () => { state.bed = k; save(); fillSettings(); if (k === "custom" && !sound) $("#soundFile").click(); });
+    bb.appendChild(l);
+  }
 }
+
+// ---------- your own sound (kept in storage) ----------
+let sound = null; // File
+function showSound() {
+  $("#soundRow").style.display = state.bed === "custom" ? "flex" : "none";
+  $("#soundName").textContent = sound ? `${sound.name} · ${(sound.size / 1048576).toFixed(1)} MB` : "No file chosen yet.";
+  $("#soundClear").style.display = sound ? "" : "none";
+}
+$("#soundPick").addEventListener("click", () => $("#soundFile").click());
+$("#soundFile").addEventListener("change", async () => {
+  const f = $("#soundFile").files[0]; $("#soundFile").value = "";
+  if (!f) return;
+  sound = f; await DB.set("kv", "sound", { file: f, name: f.name }); showSound(); clearErr();
+});
+$("#soundClear").addEventListener("click", async () => { sound = null; await DB.set("kv", "sound", null); showSound(); });
+$("#listen").addEventListener("click", async () => {
+  if (state.bed === "none") { setMsg("Silence: nothing to listen to."); return; }
+  if (state.bed === "custom" && !sound) { $("#soundFile").click(); return; }
+  const btn = $("#listen"); btn.disabled = true; btn.textContent = "Rendering…";
+  try {
+    await engineReady();
+    const blob = await engine.run(() => new Renderer(engine, state, [], () => {}, {}).previewBed(state.bed, +state.drone || 0.5, sound));
+    const a = $("#bedAudio"); if (a.src) URL.revokeObjectURL(a.src); a.src = URL.createObjectURL(blob); a.style.display = ""; a.play().catch(() => {});
+  } catch (e) { showErr(e); } finally { btn.disabled = false; btn.textContent = "Listen to 6 seconds"; }
+});
 
 // ---------- clips ----------
 function renderClips() {
@@ -324,6 +398,7 @@ function renderClips() {
           <div><label>Jump scare at (s)</label><div class="scare"><input type="checkbox" data-ck="scare_on" ${c.scare_at != null && c.scare_at !== "" ? "checked" : ""}>
             <input type="number" min="0.3" step="0.1" data-ck="scare_at" value="${c.scare_at ?? ""}" placeholder="${Math.max(0.5, (p.duration || dur) / 2).toFixed(1)}"></div></div>
           ${state.nights_mode === "manual" ? `<div><label>Night</label><label class="check" style="margin:4px 0"><input type="checkbox" data-ck="new_night" ${c.new_night || i === 0 ? "checked" : ""} ${i === 0 ? "disabled" : ""}> starts a new night</label></div>` : ""}
+          <div><label>Trailer</label><label class="check" style="margin:4px 0"><input type="checkbox" data-ck="in_trailer" ${c.in_trailer === false ? "" : "checked"}> in trailer</label></div>
         </div>
       </div>
       <div class="side">
@@ -357,6 +432,7 @@ function updateClip(c, d) {
   c.effect = d.querySelector("[data-ck=effect]").value;
   c.scare_at = on ? at : null;
   const nn = d.querySelector("[data-ck=new_night]"); if (nn) c.new_night = nn.checked;
+  c.in_trailer = d.querySelector("[data-ck=in_trailer]").checked;
   renderClips(); saveClips();
 }
 async function clipAction(act, c, i) {
@@ -451,7 +527,7 @@ async function startRender({ resumeMap = null, record = null, mode = "movie" } =
       await DB.set("kv", "render", rec);
     }
     const r = new Renderer(engine, state, ready, progress, {
-      resume: resumeMap,
+      resume: resumeMap, sound,
       onSegment: s => DB.set("seg", s.name, { name: s.name, blob: s.blob, duration: s.duration }),
       onStall: async () => {
         rec.stalls = (rec.stalls || 0) + 1;
@@ -482,7 +558,7 @@ $("#pvClose").addEventListener("click", () => { $("#modal").classList.remove("on
 $("#modal").addEventListener("click", e => { if (e.target === e.currentTarget) $("#pvClose").click(); });
 $("#reset").addEventListener("click", async () => {
   if (!confirm("Start fresh? This clears the clip list and resets the settings.")) return;
-  clips.forEach(c => c.thumb && URL.revokeObjectURL(c.thumb)); clips = [];
+  clips.forEach(c => c.thumb && URL.revokeObjectURL(c.thumb)); clips = []; sound = null;
   state = defaultProject(); save(); fillSettings(); renderClips(); clearErr(); $("#result").style.display = "none";
   await DB.clear("kv"); await DB.clear("seg");
 });
@@ -491,6 +567,8 @@ window.addEventListener("beforeunload", e => { if (busy && !reloading) { e.preve
 async function boot() {
   buildLooks(); bindSettings(); fillSettings(); renderClips();
   try {
+    const snd = await DB.get("kv", "sound");
+    if (snd?.file) { sound = snd.file; showSound(); }
     const saved = await DB.get("kv", "clips");
     if (saved?.length) {
       clips = saved.map(c => ({ ...c, thumb: c.thumbBlob ? URL.createObjectURL(c.thumbBlob) : "", pending: null }));

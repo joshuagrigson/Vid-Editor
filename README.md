@@ -60,6 +60,15 @@ the one to use.
 6. **Render.** Progress shows in the bar; the finished `.mp4` plays right in
    the page and lands in `workspace/output/`.
 
+## Sound
+
+The **Sound** panel picks the bed that plays under the whole movie or
+trailer. Six are synthesized on the spot, so nothing is licensed or
+downloaded: Dread Drone, Heartbeat, Wind & Whispers, Music Box, Electrical
+Hum, Silence. **Your own sound** takes an mp3, m4a or wav and loops or trims
+it to fit, faded in and out. The volume slider applies to whichever bed is
+chosen, and **Listen to 6 seconds** auditions it before a render.
+
 ## Create trailer
 
 The **Create trailer** button (both editions) cuts a 45, 60 or 90 second
@@ -68,10 +77,25 @@ most sudden sounds, screams, bangs, doors, and builds around them: black,
 tagline slam, a few quiet setup shots fading through black, a second tagline,
 escalating hits separated by TV static with a sub-bass boom on each, a third
 tagline, a fast montage of sub-second shots with white flashes under a rising
-shriek, silence, the single scariest moment with the jump-scare treatment,
-static, and the title slamming in with a boom, then "COMING SOON". The four
-taglines are editable in the Trailer panel. Trailers render in a fraction of
+shriek, silence, the single scariest moment in slow motion with the jump-scare
+treatment, static, and the title slamming in with a boom, then "COMING SOON",
+then one last inverted frame of the scare. Trailers render in a fraction of
 the movie's time because only the chosen moments are processed.
+
+Controls in the Trailer panel:
+
+- **Pace**: Slow burn, Classic or Relentless. Changes shot lengths and how
+  many shots the montage gets.
+- **Which moments**: Auto, or "My jump-scare marks first" so a moment you
+  marked on a clip becomes the finale and other marks feed the escalation.
+- **In trailer** on each clip leaves footage out of the trailer without
+  removing it from the movie.
+- Toggles: sub-bass booms, TV static, white flashes, camera shake on hits,
+  slow-motion finale, post-title jump, black & white.
+- **Taglines** (four, in order), a **date line** under the title, and
+  **flash words** that strobe for a few frames between montage shots.
+- **Title font** (in the Look panel) applies to every card: Classic serif,
+  Typewriter, or Bold poster.
 
 ## What it does to the footage
 
