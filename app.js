@@ -31,6 +31,7 @@ export function defaultProject() {
     style: "night", transition: "static", canvas: "auto", title_card: true, night_cards: true,
     nights_mode: "per_clip", timestamps: true, drone: 0.55, end_card: true, start_date: "",
     output_name: "", seed: Math.floor(Math.random() * 999999) + 1,
+    trailer_length: "60", trailer_taglines: "",
   };
 }
 
@@ -185,6 +186,31 @@ export class Engine {
       info.portrait = info.height > info.width;
       return info;
     });
+  }
+
+  // Loudness per half-second of a clip (audio only, so it's quick): [{t, db}], t relative to `start`.
+  // Used to find the screams and bangs for the trailer.
+  analyze(file, start, dur) { return this.run(() => this._analyze(file, start, dur)); }
+  async _analyze(file, start, dur) {   // unqueued: for use from inside a running job
+    {
+      const safe = safeName(file.name);
+      await this.mountFiles([new File([file], safe)], "/probe");
+      this.log = [];
+      try {
+        await this.ff.exec(["-hide_banner", "-loglevel", "info", "-nostats", "-ss", f3(start), "-t", f3(dur), "-i", `/probe/${safe}`, "-vn", "-threads", "1",
+          "-af", `aresample=8000,aformat=channel_layouts=mono,asetnsamples=n=4000,astats=metadata=1:reset=1,ametadata=mode=print:key=lavfi.astats.Overall.RMS_level`,
+          "-f", "null", "-"]);
+      } finally { await this.unmount("/probe"); }
+      const out = []; let t = null;
+      for (const line of this.log) {
+        let m = /pts_time:([\d.]+)/.exec(line);
+        if (m) { t = +m[1]; continue; }
+        m = /RMS_level=(-?[\d.]+|-inf)/.exec(line);
+        if (m && t != null) { out.push({ t, db: m[1] === "-inf" ? -100 : Math.max(-100, +m[1]) }); t = null; }
+      }
+      this.log = [];
+      return out;
+    }
   }
 
   async thumbnail(file, at) {
@@ -447,6 +473,9 @@ export function planNights(p, clips) {
 // Renderer
 // --------------------------------------------------------------------------
 
+// A sub-bass hit with a little click, 1.4 s. Used on trailer cuts and cards.
+const BOOM = `aevalsrc=exprs='0.9*sin(2*PI*48*t)*exp(-3.5*t)+0.4*sin(2*PI*95*t)*exp(-6*t)+0.25*(random(0)-0.5)*exp(-14*t)':s=${AR}:d=1.4,aformat=channel_layouts=stereo`;
+
 const ENC = ["-c:v", "libx264", "-preset", "superfast", "-crf", "22", "-maxrate", "10M", "-bufsize", "20M", "-pix_fmt", "yuv420p",
   "-r", String(FPS), "-g", String(FPS * 2), "-profile:v", "high", "-level", "4.1", "-c:a", "aac", "-b:a", "160k", "-ar", String(AR), "-ac", "2"];
 
@@ -491,12 +520,18 @@ export class Renderer {
   }
   async push(name, dur) { this.segments.push({ name: name + ".mp4", blob: await this.eng.take(name + ".mp4"), duration: dur }); }
 
-  async renderCard(name, png, duration, fadeIn = 0.8, fadeOut = 0.7, label = "Title card") {
+  // slam: no fade-in, a two-frame white flash and a slow push-in instead (trailer cards). boom: a sub hit on entry.
+  async renderCard(name, png, duration, fadeIn = 0.8, fadeOut = 0.7, label = "Title card", { slam = false, boom = false } = {}) {
     await this.eng.ff.writeFile(name + ".png", png);
-    const vf = `fade=t=in:st=0:d=${fadeIn},fade=t=out:st=${f3(duration - fadeOut)}:d=${fadeOut},noise=alls=7:allf=t,eq=brightness='0.012*sin(t*31)':eval=frame,format=yuv420p`;
+    const W = this.W, H = this.H;
+    let vf = slam
+      ? `scale=w='trunc(iw*(1+0.05*t/${f3(duration)})/2)*2':h='trunc(ih*(1+0.05*t/${f3(duration)})/2)*2':eval=frame,crop=${W}:${H},eq=brightness=0.7:enable='lt(t,0.07)',`
+      : `fade=t=in:st=0:d=${fadeIn},`;
+    vf += `fade=t=out:st=${f3(duration - fadeOut)}:d=${fadeOut},noise=alls=7:allf=t,eq=brightness='0.012*sin(t*31)':eval=frame,format=yuv420p`;
+    const audio = boom ? `${BOOM},apad` : `anullsrc=r=${AR}:cl=stereo`;
     const w = duration * 0.25;
-    await this.eng.exec(["-loop", "1", "-framerate", String(FPS), "-threads", "1", "-i", name + ".png", "-f", "lavfi", "-i", `anullsrc=r=${AR}:cl=stereo`,
-      "-t", f3(duration), "-vf", vf, "-shortest", ...ENC, name + ".mp4"], duration, this.job(w, label), label);
+    await this.eng.exec(["-loop", "1", "-framerate", String(FPS), "-threads", "1", "-i", name + ".png", "-f", "lavfi", "-i", audio,
+      "-t", f3(duration), "-vf", vf, ...ENC, name + ".mp4"], duration, this.job(w, label), label);
     await this.eng.ff.deleteFile(name + ".png");
     this.finish(w); await this.push(name, duration);
   }
@@ -528,12 +563,18 @@ export class Renderer {
     await this.push(name, duration);
   }
 
-  async renderClip(idx, clip, plan, part, preview = false) {
+  // opts: preview (6 s, half size), name (segment name), transition (overrides the movie setting),
+  // flash (white flash on the first frames), boom (sub hit at the start), scareT (jump scare at this
+  // second of the piece; undefined = use the clip's own marker, null = none), label.
+  async renderClip(idx, clip, plan, part, opts = {}) {
+    const preview = opts === true || opts.preview === true;
+    if (opts === true) opts = {};
     const eng = this.eng, p = this.p, W = this.W, H = this.H;
     let style = clip.effect && clip.effect !== "style" ? clip.effect : p.style;
     const meta = clip.meta;
     let D = part.dur; if (preview) D = Math.min(D, 6);
-    const name = preview ? "preview" : `clip${String(idx).padStart(2, "0")}_${String(part.i).padStart(2, "0")}`;
+    const name = opts.name || (preview ? "preview" : `clip${String(idx).padStart(2, "0")}_${String(part.i).padStart(2, "0")}`);
+    const transition = opts.transition || p.transition;
     const safe = safeName(clip.file.name);
     const clock = new Date(plan.clock.getTime() + part.start * 1000);
     await eng.mountFiles([new File([clip.file], safe)], "/in");
@@ -548,15 +589,20 @@ export class Renderer {
       graph.push(`${cur}${styleVideoChain(eng, style, W, H)}[fx]`); cur = "[fx]";
 
       // jump scare time is relative to the trimmed clip; keep it only if it lands inside this part
-      let T = clip.scare_at == null || clip.scare_at === "" ? null : +clip.scare_at;
-      if (T != null && isNaN(T)) T = null;
-      if (T != null) {
-        const clipLen = plan.duration;
-        T = Math.max(0.3, Math.min(clipLen - 0.4, T)) - part.start;
-        if (T < 0 || T > D) T = null;
-        else if (!(T >= 0.3 && T <= D - 0.4)) T = D < 1.5 ? null : Math.max(0.3, Math.min(D - 0.4, T));
+      let T;
+      if (opts.scareT !== undefined) T = opts.scareT;
+      else {
+        T = clip.scare_at == null || clip.scare_at === "" ? null : +clip.scare_at;
+        if (T != null && isNaN(T)) T = null;
+        if (T != null) {
+          const clipLen = plan.duration;
+          T = Math.max(0.3, Math.min(clipLen - 0.4, T)) - part.start;
+          if (T < 0 || T > D) T = null;
+          else if (!(T >= 0.3 && T <= D - 0.4)) T = D < 1.5 ? null : Math.max(0.3, Math.min(D - 0.4, T));
+        }
       }
       if (T != null) { graph.push(`${cur}${jumpScareVideo(T, W, H)}[sc]`); cur = "[sc]"; }
+      if (opts.flash) { graph.push(`${cur}eq=brightness=0.75:enable='lt(t,0.07)'[fl]`); cur = "[fl]"; }
 
       if (STYLES[style]?.scanlines) {
         await eng.ff.writeFile("scan.png", await makeScanlines(W, H));
@@ -570,7 +616,7 @@ export class Renderer {
         inputs.push("-framerate", "1", "-threads", "1", "-i", "/ts/ts_%04d.png");
         graph.push(`${cur}[${nIn}:v]overlay=0:0:format=yuv420[ts]`); cur = "[ts]"; nIn++;
       }
-      const fade = p.transition === "black" ? 0.5 : 0;
+      const fade = transition === "black" ? (opts.fade || 0.5) : 0;
       const fadeIn = fade && (part.first || preview), fadeOut = fade && (part.last || preview);
       let tail = "";
       if (fadeIn) tail += `fade=t=in:st=0:d=${fade},`;
@@ -586,6 +632,7 @@ export class Renderer {
         a += `,volume=0.12:enable='between(t,${f3(Math.max(0, T - 0.8))},${f3(T - 0.02)})'[a1];` + jumpScareAudioSource(T, "[sting]") + ";" +
              "[a1][sting]amix=inputs=2:duration=first:normalize=0,alimiter=limit=0.97";
       }
+      if (opts.boom) { a += `[a2];${BOOM}[bm];[a2][bm]amix=inputs=2:duration=first:normalize=0,alimiter=limit=0.97`; }
       if (fadeIn) a += `,afade=t=in:st=0:d=${fade}`;
       if (fadeOut) a += `,afade=t=out:st=${f3(D - fade)}:d=${fade}`;
       a += `,apad=whole_dur=${f3(D + 2)},atrim=duration=${f3(D)},asetpts=PTS-STARTPTS[aout]`;
@@ -595,7 +642,7 @@ export class Renderer {
       const enc = [...ENC];
       if (preview) { enc[enc.indexOf("-preset") + 1] = "ultrafast"; enc[enc.indexOf("-crf") + 1] = "26"; }
       const weight = D * (meta.hdr ? 3 : 1);
-      const partLabel = clipParts(plan.duration).length > 1 ? ` (part ${part.i + 1} of ${clipParts(plan.duration).length})` : "";
+      const partLabel = opts.label !== undefined ? opts.label : (clipParts(plan.duration).length > 1 ? ` (part ${part.i + 1} of ${clipParts(plan.duration).length})` : "");
       await eng.exec([...inputs, "-filter_complex_script", "graph.txt", "-map", "[vout]", "-map", "[aout]", ...enc, "-movflags", "+faststart", name + ".mp4"],
         D, this.job(weight, `Clip ${idx + 1}: ${clip.name}${partLabel}`), `clip ${idx + 1} (${clip.name})${partLabel}`);
       this.finish(weight);
@@ -606,7 +653,9 @@ export class Renderer {
     } finally { await eng.unmount("/in"); }
   }
 
-  async renderFinal(outName) {
+  // opts.riser = {at, dur}: a rising shriek/noise sweep mixed in over that stretch (trailer montage).
+  // opts.droneGain scales the drone; opts.quiet = [{at, dur}] stretches where the drone is pulled down (silence before the hit).
+  async renderFinal(outName, opts = {}) {
     const total = this.segments.reduce((a, s) => a + s.duration, 0);
     const files = this.segments.map(s => new File([s.blob], s.name, { type: "video/mp4" }));
     await this.eng.mountFiles(files, "/segs");
@@ -615,13 +664,19 @@ export class Renderer {
       for (const s of this.segments) list += `file '/segs/${s.name}'\nduration ${f3(s.duration)}\n`;
       await this.eng.ff.writeFile("concat.txt", list);
       const graph = [];
-      const drone = +this.p.drone || 0;
+      const drone = (+this.p.drone || 0) * (opts.droneGain || 1);
       let acur = "[0:a]";
       if (drone > 0) {
+        const quiet = (opts.quiet || []).map(q => `,volume=0.05:enable='between(t,${f3(q.at)},${f3(q.at + q.dur)})'`).join("");
         graph.push(`aevalsrc=exprs='0.55*sin(2*PI*46*t)*(0.75+0.25*sin(2*PI*0.11*t))+0.35*sin(2*PI*47.6*t)+0.22*sin(2*PI*92*t)*(0.5+0.5*sin(2*PI*0.07*t+1))+0.18*sin(2*PI*138.5*t)*(0.5+0.5*sin(2*PI*0.05*t+2))':s=${AR},aformat=channel_layouts=stereo[dr1]`);
         graph.push(`anoisesrc=color=brown:amplitude=0.6:r=${AR},aformat=channel_layouts=stereo,lowpass=f=300[dr2]`);
-        graph.push(`[dr1][dr2]amix=inputs=2:normalize=0,volume=${f3(0.30 * drone)},afade=t=in:st=0:d=3,afade=t=out:st=${f3(Math.max(0, total - 4))}:d=4[drone]`);
+        graph.push(`[dr1][dr2]amix=inputs=2:normalize=0,volume=${f3(0.30 * drone)}${quiet},afade=t=in:st=0:d=3,afade=t=out:st=${f3(Math.max(0, total - 4))}:d=4[drone]`);
         graph.push("[0:a][drone]amix=inputs=2:duration=first:normalize=0[amix]"); acur = "[amix]";
+      }
+      if (opts.riser && opts.riser.dur > 1) {
+        const Dr = f3(opts.riser.dur);
+        graph.push(`aevalsrc=exprs='(0.28*sin(2*PI*(70+900*pow(t/${Dr},2))*t)+0.22*(random(0)-0.5)+0.18*sin(2*PI*(35+300*pow(t/${Dr},2))*t))*(0.15+0.85*pow(t/${Dr},1.5))':s=${AR}:d=${Dr},aformat=channel_layouts=stereo,adelay=${Math.round(opts.riser.at * 1000)}:all=1[riser]`);
+        graph.push(`${acur}[riser]amix=inputs=2:duration=first:normalize=0[amixr]`); acur = "[amixr]";
       }
       graph.push(`${acur}alimiter=limit=0.95,afade=t=out:st=${f3(Math.max(0, total - 1.5))}:d=1.5[aout]`);
       await this.eng.ff.writeFile("final.txt", graph.join(";\n") + "\n");
@@ -691,6 +746,138 @@ export class Renderer {
     const T = +this.clips[idx].scare_at;
     if (this.clips[idx].scare_at != null && this.clips[idx].scare_at !== "" && !isNaN(T)) start = Math.max(0, Math.min(plan.duration - 6, T - 2.5));
     const part = { i: 0, start, dur: Math.min(6, plan.duration - start), first: true, last: true };
-    return this.renderClip(idx, this.clips[idx], plan, part, true);
+    return this.renderClip(idx, this.clips[idx], plan, part, { preview: true });
   }
+
+  // ---------------- trailer ----------------
+  estimateTrailerWork(tp) {
+    let w = 1;
+    for (const it of tp.items) {
+      if (it.type === "moment") w += it.dur * (this.clips[it.clip].meta.hdr ? 3 : 1);
+      else if (it.type === "card") w += it.dur * 0.25;
+    }
+    return w + w * 0.08;
+  }
+
+  async runTrailer(tp) {
+    const p = this.p;
+    if (!this.clips.length) throw new Error("Add at least one clip first.");
+    const plans = planNights(p, this.clips);
+    this.totalWork = this.estimateTrailerWork(tp); this.segments = [];
+    const S = (name, weight, fn) => this.seg(name, weight, fn);
+    let at = 0, riser = null, quiet = [];
+    for (let k = 0; k < tp.items.length; k++) {
+      const it = tp.items[k], nm = `tr${String(k).padStart(2, "0")}_${it.type}`;
+      if (it.type === "black") { await S(nm, 0, () => this.renderBlack(nm, it.dur)); if (it.quiet) quiet.push({ at, dur: it.dur }); }
+      else if (it.type === "static") await S(nm, 0, () => this.renderStatic(nm, it.dur));
+      else if (it.type === "card") {
+        await S(nm, it.dur * 0.25, async () => this.renderCard(nm, await makeCard(this.W, this.H, {
+          title: it.title || "", subtitle: it.subtitle || "", titleScale: it.big ? ((it.title || "").length < 22 ? 0.085 : 0.06) : 0.05,
+        }), it.dur, 0.8, it.fadeOut ?? 0.4, it.big ? "Title card" : `Card: ${it.title}`, { slam: true, boom: true }));
+      } else if (it.type === "moment") {
+        const clip = this.clips[it.clip], pl = plans[it.clip];
+        const part = { i: 0, start: it.start, dur: it.dur, first: true, last: true };
+        if (it.riser) riser = riser ? { at: riser.at, dur: at + it.dur - riser.at } : { at, dur: it.dur };
+        await S(nm, it.dur * (clip.meta.hdr ? 3 : 1), () => this.renderClip(it.clip, clip, pl, part, {
+          name: nm, transition: it.transition || "cut", fade: 0.35, flash: !!it.flash, boom: !!it.boom,
+          scareT: it.scare ? Math.min(it.dur - 0.4, it.scare) : null, label: ` (trailer moment ${k + 1} of ${tp.items.length})`,
+        }));
+      }
+      at += it.dur;
+    }
+    let blob;
+    try { blob = await this.renderFinal("trailer.mp4", { riser, quiet, droneGain: 1.35 }); }
+    catch (e) { if (e.stalled && this.onStall) await this.onStall(e); throw e; }
+    this.segments = [];
+    this.progress(1, "Done");
+    return blob;
+  }
+}
+
+// --------------------------------------------------------------------------
+// Trailer planning: pick the loudest / most sudden moments and lay them out as a trailer.
+// --------------------------------------------------------------------------
+
+export const TRAILER_LENGTHS = { 45: { setup: 2, esc: 4, montage: 6 }, 60: { setup: 3, esc: 5, montage: 8 }, 90: { setup: 4, esc: 7, montage: 12 } };
+export const DEFAULT_TAGLINES = "THIS HALLOWEEN\nSOMETHING IS IN THE HOUSE\nNO ONE WILL BELIEVE THEM\nCOMING SOON";
+
+// analyses: {clipIdx -> [{t, db}]} with t relative to the trimmed clip start. Deterministic given the seed.
+export function planTrailer(proj, clips, analyses, length = 60) {
+  const counts = TRAILER_LENGTHS[length] || TRAILER_LENGTHS[60];
+  const plans = planNights(proj, clips);
+  const rnd = mulberry((+proj.seed || 1) + 77);
+  // score every half-second window: loudness plus how much louder it is than the seconds before it
+  const wins = [];
+  clips.forEach((c, ci) => {
+    const dur = plans[ci].duration;
+    let a = (analyses[ci] || []).filter(w => w.t >= 0 && w.t <= dur);
+    if (a.length < 4) a = Array.from({ length: Math.floor(dur * 2) }, (_, i) => ({ t: i / 2, db: -40 + rnd() * 6 }));
+    const dbs = a.map(w => w.db);
+    const lo = Math.min(...dbs), hi = Math.max(...dbs), span = Math.max(6, hi - lo);
+    a.forEach((w, i) => {
+      const prev = a.slice(Math.max(0, i - 6), i).map(x => x.db);
+      const before = prev.length ? prev.reduce((s, x) => s + x, 0) / prev.length : w.db;
+      const loud = (w.db - lo) / span, jump = Math.max(0, w.db - before) / span;
+      wins.push({ clip: ci, t: w.t, db: w.db, score: 0.55 * loud + 0.45 * Math.min(1, jump * 2) + rnd() * 0.02, dur });
+    });
+  });
+  const taken = [];
+  // how far apart picks must be within one clip: generous with lots of footage, tight with little
+  const totalDur = plans.reduce((s, pl) => s + pl.duration, 0);
+  const wanted = counts.setup + counts.esc + counts.montage + 1;
+  const GAP = Math.max(1.2, Math.min(6, totalDur / (wanted * 2.5)));
+  const free = (w, gap = GAP) => !taken.some(x => x.clip === w.clip && Math.abs(x.t - w.t) < gap);
+  const fit = (w, lead, len) => w.t - lead >= 0 && w.t - lead + len <= w.dur;
+
+  // the big one: the single most striking moment, with a lead-in so the hit lands 1.4 s in
+  const byScore = [...wins].sort((a, b) => b.score - a.score);
+  let finale = byScore.find(w => fit(w, 1.4, 2.4)) || byScore[0];
+  if (finale) taken.push(finale);
+
+  const pick = (n, len, lead, minScore) => {
+    const out = [], perClip = {};
+    const cap = Math.ceil(n / Math.max(1, clips.length)) + 1;
+    for (const w of byScore) {
+      if (out.length >= n) break;
+      if (w === finale || !free(w) || !fit(w, lead, len)) continue;
+      if ((perClip[w.clip] || 0) >= cap) continue;
+      if (minScore != null && w.score < minScore) continue;
+      out.push(w); taken.push(w); perClip[w.clip] = (perClip[w.clip] || 0) + 1;
+    }
+    return out;
+  };
+  const esc = pick(counts.esc, 1.5, 0.6);
+  const montage = pick(counts.montage, 0.8, 0.3);
+  // setup: quiet, early stretches, one per clip where possible
+  const setup = [];
+  const quietSorted = [...wins].sort((a, b) => a.score - b.score);
+  for (const w of quietSorted) {
+    if (setup.length >= counts.setup) break;
+    if (w.t > w.dur * 0.6 || !fit(w, 0, 2.4) || !free(w)) continue;
+    if (setup.some(s => s.clip === w.clip) && setup.length < clips.length) continue;
+    setup.push(w); taken.push(w);
+  }
+  const chrono = arr => arr.sort((a, b) => a.clip - b.clip || a.t - b.t);
+  chrono(setup); chrono(esc);
+  // montage: interleave clips so consecutive shots come from different places
+  const byClip = {}; chrono(montage).forEach(w => (byClip[w.clip] ||= []).push(w));
+  const mont = []; let more = true;
+  while (more) { more = false; for (const k of Object.keys(byClip)) { const w = byClip[k].shift(); if (w) { mont.push(w); more = true; } } }
+
+  const tags = (proj.trailer_taglines || DEFAULT_TAGLINES).split("\n").map(s => s.trim()).filter(Boolean);
+  const items = [];
+  items.push({ type: "black", dur: 1.0 });
+  if (tags[0]) items.push({ type: "card", title: tags[0], dur: 1.9 });
+  setup.forEach(w => items.push({ type: "moment", clip: w.clip, start: w.t, dur: 2.4, transition: "black" }));
+  if (tags[1]) items.push({ type: "card", title: tags[1], dur: 1.9 });
+  esc.forEach((w, i) => { if (i > 0) items.push({ type: "static", dur: 0.14 }); items.push({ type: "moment", clip: w.clip, start: w.t - 0.6, dur: 1.5, boom: true }); });
+  if (tags[2]) items.push({ type: "card", title: tags[2], dur: 1.9 });
+  mont.forEach(w => items.push({ type: "moment", clip: w.clip, start: w.t - 0.3, dur: 0.8, flash: true, riser: true }));
+  items.push({ type: "black", dur: 0.9, quiet: true });
+  if (finale) items.push({ type: "moment", clip: finale.clip, start: Math.max(0, finale.t - 1.4), dur: 2.4, scare: 1.4 });
+  items.push({ type: "static", dur: 0.2 });
+  items.push({ type: "card", title: proj.title || "UNTITLED", subtitle: proj.subtitle || "", dur: 3.4, big: true, fadeOut: 0.7 });
+  if (tags[3]) items.push({ type: "card", title: tags[3], dur: 2.0, fadeOut: 0.8 });
+  items.push({ type: "black", dur: 1.0 });
+  return { length, items, total: items.reduce((s, it) => s + it.dur, 0) };
 }

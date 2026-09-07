@@ -501,6 +501,8 @@ def default_project() -> dict:
         "end_card": True,
         "start_date": "",              # YYYY-MM-DD, blank = 21 days ago
         "output_name": "",
+        "trailer_length": 60,
+        "trailer_taglines": "",
         "seed": random.randint(1, 999999),
         "clips": [],                   # [{id, file, name, meta, start, end, effect, scare_at, new_night}]
     }
@@ -575,6 +577,138 @@ ENC_INTER = ["-c:v", "libx264", "-preset", "fast", "-crf", "19", "-maxrate", "14
 ENC_FINAL = ["-c:v", "copy", "-c:a", "aac", "-b:a", "192k", "-ar", str(AUDIO_RATE), "-ac", "2",
              "-movflags", "+faststart"]
 
+# A sub-bass hit with a little click, 1.4 s. Used on trailer cuts and cards.
+BOOM = ("aevalsrc=exprs='0.9*sin(2*PI*48*t)*exp(-3.5*t)+0.4*sin(2*PI*95*t)*exp(-6*t)"
+        f"+0.25*(random(0)-0.5)*exp(-14*t)':s={AUDIO_RATE}:d=1.4,aformat=channel_layouts=stereo")
+
+
+# --------------------------------------------------------------------------
+# Trailer: find the loud, sudden moments and cut them into a trailer
+# --------------------------------------------------------------------------
+
+TRAILER_LENGTHS = {45: (2, 4, 6), 60: (3, 5, 8), 90: (4, 7, 12)}   # setup, escalation, montage shots
+DEFAULT_TAGLINES = "THIS HALLOWEEN\nSOMETHING IS IN THE HOUSE\nNO ONE WILL BELIEVE THEM\nCOMING SOON"
+
+
+def analyze_loudness(path: str, start: float, dur: float) -> list[dict]:
+    """RMS loudness per half second (audio only, quick): [{t, db}], t relative to start."""
+    cmd = ff_base() + ["-nostats", "-loglevel", "info", "-ss", f"{start:.3f}", "-t", f"{dur:.3f}", "-i", path, "-vn",
+                       "-af", "aresample=8000,aformat=channel_layouts=mono,asetnsamples=n=4000,astats=metadata=1:reset=1,"
+                              "ametadata=mode=print:key=lavfi.astats.Overall.RMS_level",
+                       "-f", "null", "-"]
+    r = subprocess.run(cmd, capture_output=True, text=True, errors="replace")
+    out, t = [], None
+    for line in r.stderr.splitlines():
+        m = re.search(r"pts_time:([\d.]+)", line)
+        if m:
+            t = float(m.group(1))
+            continue
+        m = re.search(r"RMS_level=(-?[\d.]+|-inf)", line)
+        if m and t is not None:
+            out.append({"t": t, "db": -100.0 if m.group(1) == "-inf" else max(-100.0, float(m.group(1)))})
+            t = None
+    return out
+
+
+def plan_trailer(proj: dict, analyses: dict[int, list[dict]], length: int = 60) -> dict:
+    """Pick the moments and lay out the trailer. Deterministic for a given seed. Mirrors app.js planTrailer."""
+    counts = TRAILER_LENGTHS.get(int(length), TRAILER_LENGTHS[60])
+    clips = proj["clips"]
+    plans = plan_nights(proj)
+    rng = random.Random(int(proj.get("seed") or 1) + 77)
+    wins: list[dict] = []
+    for ci, clip in enumerate(clips):
+        dur = plans[ci]["duration"]
+        a = [w for w in (analyses.get(ci) or []) if 0 <= w["t"] <= dur]
+        if len(a) < 4:
+            a = [{"t": i / 2, "db": -40 + rng.random() * 6} for i in range(int(dur * 2))]
+        dbs = [w["db"] for w in a]
+        lo, hi = min(dbs), max(dbs)
+        span = max(6.0, hi - lo)
+        for i, w in enumerate(a):
+            prev = [x["db"] for x in a[max(0, i - 6):i]]
+            before = sum(prev) / len(prev) if prev else w["db"]
+            loud = (w["db"] - lo) / span
+            jump = max(0.0, w["db"] - before) / span
+            wins.append({"clip": ci, "t": w["t"], "db": w["db"], "dur": dur,
+                         "score": 0.55 * loud + 0.45 * min(1.0, jump * 2) + rng.random() * 0.02})
+    taken: list[dict] = []
+    total_dur = sum(p["duration"] for p in plans)
+    wanted = sum(counts) + 1
+    gap = max(1.2, min(6.0, total_dur / (wanted * 2.5)))
+
+    def free(w):
+        return not any(x["clip"] == w["clip"] and abs(x["t"] - w["t"]) < gap for x in taken)
+
+    def fit(w, lead, ln):
+        return w["t"] - lead >= 0 and w["t"] - lead + ln <= w["dur"]
+
+    by_score = sorted(wins, key=lambda w: -w["score"])
+    finale = next((w for w in by_score if fit(w, 1.4, 2.4)), by_score[0] if by_score else None)
+    if finale:
+        taken.append(finale)
+
+    def pick(n, ln, lead):
+        out, per_clip = [], {}
+        cap = math.ceil(n / max(1, len(clips))) + 1
+        for w in by_score:
+            if len(out) >= n:
+                break
+            if w is finale or not free(w) or not fit(w, lead, ln) or per_clip.get(w["clip"], 0) >= cap:
+                continue
+            out.append(w)
+            taken.append(w)
+            per_clip[w["clip"]] = per_clip.get(w["clip"], 0) + 1
+        return out
+
+    esc = pick(counts[1], 1.5, 0.6)
+    montage = pick(counts[2], 0.8, 0.3)
+    setup = []
+    for w in sorted(wins, key=lambda w: w["score"]):
+        if len(setup) >= counts[0]:
+            break
+        if w["t"] > w["dur"] * 0.6 or not fit(w, 0, 2.4) or not free(w):
+            continue
+        if any(s["clip"] == w["clip"] for s in setup) and len(setup) < len(clips):
+            continue
+        setup.append(w)
+        taken.append(w)
+    chrono = lambda arr: sorted(arr, key=lambda w: (w["clip"], w["t"]))  # noqa: E731
+    setup, esc = chrono(setup), chrono(esc)
+    by_clip: dict[int, list[dict]] = {}
+    for w in chrono(montage):
+        by_clip.setdefault(w["clip"], []).append(w)
+    mont = []
+    while any(by_clip.values()):
+        for k in list(by_clip):
+            if by_clip[k]:
+                mont.append(by_clip[k].pop(0))
+
+    tags = [s.strip() for s in (proj.get("trailer_taglines") or DEFAULT_TAGLINES).splitlines() if s.strip()]
+    items: list[dict] = [{"type": "black", "dur": 1.0}]
+    if len(tags) > 0:
+        items.append({"type": "card", "title": tags[0], "dur": 1.9})
+    items += [{"type": "moment", "clip": w["clip"], "start": w["t"], "dur": 2.4, "transition": "black"} for w in setup]
+    if len(tags) > 1:
+        items.append({"type": "card", "title": tags[1], "dur": 1.9})
+    for i, w in enumerate(esc):
+        if i > 0:
+            items.append({"type": "static", "dur": 0.14})
+        items.append({"type": "moment", "clip": w["clip"], "start": w["t"] - 0.6, "dur": 1.5, "boom": True})
+    if len(tags) > 2:
+        items.append({"type": "card", "title": tags[2], "dur": 1.9})
+    items += [{"type": "moment", "clip": w["clip"], "start": w["t"] - 0.3, "dur": 0.8, "flash": True, "riser": True} for w in mont]
+    items.append({"type": "black", "dur": 0.9, "quiet": True})
+    if finale:
+        items.append({"type": "moment", "clip": finale["clip"], "start": max(0.0, finale["t"] - 1.4), "dur": 2.4, "scare": 1.4})
+    items.append({"type": "static", "dur": 0.2})
+    items.append({"type": "card", "title": proj.get("title") or "UNTITLED", "subtitle": proj.get("subtitle") or "",
+                  "dur": 3.4, "big": True, "fade_out": 0.7})
+    if len(tags) > 3:
+        items.append({"type": "card", "title": tags[3], "dur": 2.0, "fade_out": 0.8})
+    items.append({"type": "black", "dur": 1.0})
+    return {"length": int(length), "items": items, "total": sum(it["dur"] for it in items)}
+
 
 class Renderer:
     def __init__(self, proj: dict, workspace: str, progress=None, preview_clip: str | None = None):
@@ -601,13 +735,22 @@ class Renderer:
     def _seg(self, name: str) -> str:
         return os.path.join(self.build, name + ".mp4")
 
-    def render_card(self, name: str, png: str, duration: float, fade_in=0.8, fade_out=0.7) -> str:
+    def render_card(self, name: str, png: str, duration: float, fade_in=0.8, fade_out=0.7,
+                    slam: bool = False, boom: bool = False) -> str:
+        """slam: no fade-in, a two-frame white flash and a slow push-in instead. boom: sub hit on entry."""
         out = self._seg(name)
-        vf = (f"fade=t=in:st=0:d={fade_in},fade=t=out:st={duration - fade_out:.3f}:d={fade_out},"
-              f"noise=alls=7:allf=t,eq=brightness='0.012*sin(t*31)':eval=frame,format=yuv420p")
+        W, H = self.W, self.H
+        if slam:
+            vf = (f"scale=w='trunc(iw*(1+0.05*t/{duration:.3f})/2)*2':h='trunc(ih*(1+0.05*t/{duration:.3f})/2)*2':eval=frame,"
+                  f"crop={W}:{H},eq=brightness=0.7:enable='lt(t,0.07)',")
+        else:
+            vf = f"fade=t=in:st=0:d={fade_in},"
+        vf += (f"fade=t=out:st={duration - fade_out:.3f}:d={fade_out},"
+               f"noise=alls=7:allf=t,eq=brightness='0.012*sin(t*31)':eval=frame,format=yuv420p")
+        audio = f"{BOOM},apad" if boom else f"anullsrc=r={AUDIO_RATE}:cl=stereo"
         args = ["-loop", "1", "-framerate", str(FPS), "-i", png,
-                "-f", "lavfi", "-i", f"anullsrc=r={AUDIO_RATE}:cl=stereo",
-                "-t", f"{duration:.3f}", "-vf", vf, "-shortest"] + ENC_INTER + [out]
+                "-f", "lavfi", "-i", audio,
+                "-t", f"{duration:.3f}", "-vf", vf] + ENC_INTER + [out]
         run_ffmpeg(args, duration, self._job(duration * 0.25, f"Title card: {name}"),
                    os.path.join(self.build, name + ".log"))
         self._finish(duration * 0.25)
@@ -652,7 +795,13 @@ class Renderer:
         self.segments.append((out, duration))
         return out
 
-    def render_clip(self, idx: int, clip: dict, plan: dict, preview: bool = False) -> str:
+    def render_clip(self, idx: int, clip: dict, plan: dict, preview: bool = False, *,
+                    piece: dict | None = None, name: str | None = None, transition: str | None = None,
+                    flash: bool = False, boom: bool = False, scare_T: float | None | str = "clip",
+                    label: str = "") -> str:
+        """piece = {start, dur} relative to the trimmed clip (default: the whole clip).
+        transition overrides the movie setting; flash = white flash on the first frames; boom = sub hit at the
+        start; scare_T = seconds into the piece for a jump scare, None for none, "clip" = the clip's own marker."""
         proj = self.proj
         W, H = self.W, self.H
         style = clip.get("effect") or "style"
@@ -660,9 +809,13 @@ class Renderer:
             style = proj["style"]
         meta = clip["meta"]
         start, D = plan["start"], plan["duration"]
+        if piece:
+            start, D = start + piece["start"], piece["dur"]
         if preview:
             D = min(D, 6.0)
-        name = f"clip{idx:02d}" if not preview else f"preview_{clip['id']}"
+        name = name or (f"clip{idx:02d}" if not preview else f"preview_{clip['id']}")
+        transition = transition or proj["transition"]
+        clock = plan["clock"] + dt.timedelta(seconds=piece["start"] if piece else 0)
         out = self._seg(name)
         src = os.path.join(self.ws, "clips", clip["file"])
 
@@ -682,18 +835,22 @@ class Renderer:
         cur = "[fx]"
 
         # jump scare
-        scare = clip.get("scare_at")
-        scare_T = None
-        if scare not in (None, "", False):
-            try:
-                scare_T = float(scare)
-            except (TypeError, ValueError):
-                scare_T = None
-        if scare_T is not None and not (0.3 <= scare_T <= D - 0.4):
-            scare_T = None if D < 1.5 else max(0.3, min(D - 0.4, scare_T))
+        if scare_T == "clip":
+            scare = clip.get("scare_at")
+            scare_T = None
+            if scare not in (None, "", False):
+                try:
+                    scare_T = float(scare)
+                except (TypeError, ValueError):
+                    scare_T = None
+            if scare_T is not None and not (0.3 <= scare_T <= D - 0.4):
+                scare_T = None if D < 1.5 else max(0.3, min(D - 0.4, scare_T))
         if scare_T is not None:
             graph.append(f"{cur}{jump_scare_video(scare_T, W, H)}[sc]")
             cur = "[sc]"
+        if flash:
+            graph.append(f"{cur}eq=brightness=0.75:enable='lt(t,0.07)'[fl]")
+            cur = "[fl]"
 
         # scanlines overlay
         if STYLES.get(style, {}).get("scanlines"):
@@ -710,14 +867,14 @@ class Renderer:
             folder = os.path.join(self.build, name + "_ts")
             shutil.rmtree(folder, ignore_errors=True)
             secs = int(math.ceil(D)) + 2
-            make_timestamp_frames(folder, W, H, style, plan["night"], plan["clock"], secs)
+            make_timestamp_frames(folder, W, H, style, plan["night"], clock, secs)
             inputs += ["-framerate", "1", "-i", os.path.join(folder, "ts_%04d.png")]
             graph.append(f"{cur}[{n_in}:v]overlay=0:0:format=auto[ts]")
             cur = "[ts]"
             n_in += 1
 
         # fades + exact length
-        fade = 0.5 if proj["transition"] == "black" else 0.0
+        fade = (0.35 if piece else 0.5) if transition == "black" else 0.0
         tail = ""
         if fade:
             tail += f"fade=t=in:st=0:d={fade},fade=t=out:st={D - fade:.3f}:d={fade},"
@@ -739,6 +896,8 @@ class Renderer:
             achain += f",volume=0.12:enable='between(t,{max(0, scare_T - 0.8):.3f},{scare_T - 0.02:.3f})'[a1];"
             achain += jump_scare_audio_source(scare_T, "[sting]") + ";"
             achain += "[a1][sting]amix=inputs=2:duration=first:normalize=0,alimiter=limit=0.97"
+        if boom:
+            achain += f"[a2];{BOOM}[bm];[a2][bm]amix=inputs=2:duration=first:normalize=0,alimiter=limit=0.97"
         if fade:
             achain += f",afade=t=in:st=0:d={fade},afade=t=out:st={D - fade:.3f}:d={fade}"
         achain += f",apad=whole_dur={D + 2:.3f},atrim=duration={D:.3f},asetpts=PTS-STARTPTS[aout]"
@@ -755,23 +914,26 @@ class Renderer:
             enc += ["-movflags", "+faststart"]
         args = inputs + ["-filter_complex_script", script, "-map", "[vout]", "-map", "[aout]"] + enc + [out]
         weight = D * (1.0 if not meta.get("hdr") else 1.6)
-        run_ffmpeg(args, D, self._job(weight, f"Clip {idx + 1}: {clip['name']}"), os.path.join(self.build, name + ".log"))
+        run_ffmpeg(args, D, self._job(weight, f"Clip {idx + 1}: {clip['name']}{label}"), os.path.join(self.build, name + ".log"))
         self._finish(weight)
         if not preview:
             self.segments.append((out, D))
         return out
 
-    def render_final(self, out_path: str) -> None:
+    def render_final(self, out_path: str, riser: tuple[float, float] | None = None,
+                     quiet: list[tuple[float, float]] | None = None, drone_gain: float = 1.0) -> None:
+        """riser=(at, dur): rising shriek under that stretch. quiet=[(at, dur)]: drone pulled down there."""
         total = sum(d for _, d in self.segments)
         lst = os.path.join(self.build, "concat.txt")
         with open(lst, "w", encoding="utf-8") as f:
             f.write("ffconcat version 1.0\n")
             for p, d in self.segments:
                 f.write(f"file '{ffconcat_path(p)}'\nduration {d:.3f}\n")
-        drone = float(self.proj.get("drone") or 0)
+        drone = float(self.proj.get("drone") or 0) * drone_gain
         graph = []
         if drone > 0:
             vol = 0.30 * drone
+            q = "".join(f",volume=0.05:enable='between(t,{a:.3f},{a + d:.3f})'" for a, d in (quiet or []))
             graph.append(
                 "aevalsrc=exprs='0.55*sin(2*PI*46*t)*(0.75+0.25*sin(2*PI*0.11*t))"
                 "+0.35*sin(2*PI*47.6*t)+0.22*sin(2*PI*92*t)*(0.5+0.5*sin(2*PI*0.07*t+1))"
@@ -779,12 +941,20 @@ class Renderer:
                 "aformat=channel_layouts=stereo[dr1]")
             graph.append(f"anoisesrc=color=brown:amplitude=0.6:r={AUDIO_RATE},aformat=channel_layouts=stereo,"
                          "lowpass=f=300[dr2]")
-            graph.append(f"[dr1][dr2]amix=inputs=2:normalize=0,volume={vol:.3f},"
+            graph.append(f"[dr1][dr2]amix=inputs=2:normalize=0,volume={vol:.3f}{q},"
                          f"afade=t=in:st=0:d=3,afade=t=out:st={max(0, total - 4):.3f}:d=4[drone]")
             graph.append("[0:a][drone]amix=inputs=2:duration=first:normalize=0[amix]")
             acur = "[amix]"
         else:
             acur = "[0:a]"
+        if riser and riser[1] > 1:
+            at, dr = riser
+            graph.append(
+                f"aevalsrc=exprs='(0.28*sin(2*PI*(70+900*pow(t/{dr:.3f},2))*t)+0.22*(random(0)-0.5)"
+                f"+0.18*sin(2*PI*(35+300*pow(t/{dr:.3f},2))*t))*(0.15+0.85*pow(t/{dr:.3f},1.5))'"
+                f":s={AUDIO_RATE}:d={dr:.3f},aformat=channel_layouts=stereo,adelay={int(at * 1000)}:all=1[riser]")
+            graph.append(f"{acur}[riser]amix=inputs=2:duration=first:normalize=0[amixr]")
+            acur = "[amixr]"
         graph.append(f"{acur}alimiter=limit=0.95,afade=t=out:st={max(0, total - 1.5):.3f}:d=1.5[aout]")
         script = os.path.join(self.build, "final.filters.txt")
         with open(script, "w", encoding="utf-8") as f:
@@ -794,6 +964,57 @@ class Renderer:
         weight = total * 0.08
         run_ffmpeg(args, total, self._job(weight, "Final assembly"), os.path.join(self.build, "final.log"))
         self._finish(weight)
+
+    # -- trailer -------------------------------------------------------------
+    def run_trailer(self, out_path: str, length: int | None = None) -> str:
+        proj = self.proj
+        if not proj["clips"]:
+            raise FriendlyError("Add at least one clip first.")
+        os.makedirs(self.build, exist_ok=True)
+        os.makedirs(os.path.dirname(out_path), exist_ok=True)
+        plans = plan_nights(proj)
+        analyses: dict[int, list[dict]] = {}
+        for i, (clip, pl) in enumerate(zip(proj["clips"], plans)):
+            self.progress(0.01 * i / len(plans), f"Listening to clip {i + 1} of {len(plans)} for the loud parts…")
+            src = os.path.join(self.ws, "clips", clip["file"])
+            analyses[i] = analyze_loudness(src, pl["start"], pl["duration"]) if clip["meta"].get("has_audio") else []
+        tp = plan_trailer(proj, analyses, int(length or proj.get("trailer_length") or 60))
+        work = 1.0
+        for it in tp["items"]:
+            if it["type"] == "moment":
+                work += it["dur"] * (1.6 if proj["clips"][it["clip"]]["meta"].get("hdr") else 1.0)
+            elif it["type"] == "card":
+                work += it["dur"] * 0.25
+        self.total_work = work + work * 0.08
+        self.segments = []
+        at, riser, quiet = 0.0, None, []
+        for k, it in enumerate(tp["items"]):
+            nm = f"tr{k:02d}_{it['type']}"
+            if it["type"] == "black":
+                self.render_black(nm, it["dur"])
+                if it.get("quiet"):
+                    quiet.append((at, it["dur"]))
+            elif it["type"] == "static":
+                self.render_static(nm, it["dur"])
+            elif it["type"] == "card":
+                png = os.path.join(self.build, nm + ".png")
+                big = it.get("big")
+                make_card(png, self.W, self.H, title=it.get("title", ""), subtitle=it.get("subtitle", ""),
+                          title_scale=(0.085 if len(it.get("title", "")) < 22 else 0.06) if big else 0.05)
+                self.render_card(nm, png, it["dur"], 0.8, it.get("fade_out", 0.4), slam=True, boom=True)
+            elif it["type"] == "moment":
+                if it.get("riser"):
+                    riser = (riser[0], at + it["dur"] - riser[0]) if riser else (at, it["dur"])
+                clip = proj["clips"][it["clip"]]
+                self.render_clip(it["clip"], clip, plans[it["clip"]], piece={"start": it["start"], "dur": it["dur"]},
+                                 name=nm, transition=it.get("transition", "cut"), flash=bool(it.get("flash")),
+                                 boom=bool(it.get("boom")),
+                                 scare_T=(min(it["dur"] - 0.4, it["scare"]) if it.get("scare") else None),
+                                 label=f" (trailer moment {k + 1} of {len(tp['items'])})")
+            at += it["dur"]
+        self.render_final(out_path, riser=riser, quiet=quiet, drone_gain=1.35)
+        self.progress(1.0, "Done")
+        return out_path
 
     # -- orchestration -----------------------------------------------------
     def estimate_work(self, plan: list[dict]) -> float:
@@ -1189,6 +1410,17 @@ def make_handler(ws: Workspace, job: RenderJob):
 
                     def work(progress):
                         Renderer(proj, ws.root, progress).run(out)
+                        return "/files/output/" + os.path.basename(out)
+
+                    job.start(work)
+                    return self._json(job.status())
+                if p == "/api/trailer":
+                    proj = json.loads(json.dumps(ws.proj))
+                    name = re.sub(r"[^A-Za-z0-9 ._-]+", "", proj.get("output_name") or proj["title"] or "ghostcut").strip() or "ghostcut"
+                    out = os.path.join(ws.output_dir, f"{name} - Trailer {time.strftime('%Y-%m-%d %H%M')}.mp4")
+
+                    def work(progress):
+                        Renderer(proj, ws.root, progress).run_trailer(out)
                         return "/files/output/" + os.path.basename(out)
 
                     job.start(work)

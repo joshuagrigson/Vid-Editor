@@ -146,6 +146,20 @@
       </select></label>
       <label class="f">Output file name <input type="text" data-k="output_name" placeholder="(uses the title)"></label>
     </div>
+
+    <div class="panel" style="margin-top:14px">
+      <h2>The trailer</h2>
+      <p class="hint" style="margin:0 0 8px">“Create trailer” listens to every clip for the loudest, most sudden moments (screams, bangs, doors),
+        then cuts them into a trailer: quiet setup shots, escalating hits with static, a fast montage under a rising shriek, a silence, the
+        single scariest moment, and the title slamming in.</p>
+      <label class="f">Length <select data-k="trailer_length">
+        <option value="45">About 45 seconds</option>
+        <option value="60">About 60 seconds</option>
+        <option value="90">About 90 seconds</option>
+      </select></label>
+      <label class="f">Taglines (one per line, in order: opening, mid, late, closing)
+        <textarea data-k="trailer_taglines" placeholder="THIS HALLOWEEN&#10;SOMETHING IS IN THE HOUSE&#10;NO ONE WILL BELIEVE THEM&#10;COMING SOON"></textarea></label>
+    </div>
   </aside>
 
   <section>
@@ -179,7 +193,10 @@
         <div class="row"><a id="dl" class="primary" href="#" download><button class="primary">Save the movie</button></a><span class="hint" id="outInfo"></span></div>
       </div>
     </div>
-    <div><button class="primary" id="render" style="padding:14px 28px;font-size:16px" disabled>Render the movie</button></div>
+    <div style="display:flex;flex-direction:column;gap:8px">
+      <button class="primary" id="render" style="padding:14px 28px;font-size:16px" disabled>Render the movie</button>
+      <button id="trailer" style="padding:10px 28px" disabled>Create trailer</button>
+    </div>
   </div>
 </footer>
 
@@ -189,7 +206,7 @@
 </div></div>
 
 <script type="module">
-import { Engine, Renderer, STYLES, TRANSITIONS, defaultProject, planNights, chooseCanvas, clipSpan } from "./app.js";
+import { Engine, Renderer, STYLES, TRANSITIONS, defaultProject, planNights, chooseCanvas, clipSpan, planTrailer } from "./app.js";
 
 const $ = (s, r = document) => r.querySelector(s);
 const fmt = s => { s = Math.round(s); return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0"); };
@@ -282,6 +299,7 @@ function renderClips() {
   $("#footage").textContent = fmt(plan.reduce((a, p) => a + p.duration, 0));
   $("#shape").textContent = ready.length ? chooseCanvas(state, ready).join("×") : "—";
   $("#render").disabled = busy || !ready.length || !engine.ff;
+  $("#trailer").disabled = busy || !ready.length || !engine.ff;
   if (!clips.length) { box.innerHTML = '<div class="empty">No clips yet. Drop some in above.</div>'; return; }
   clips.forEach((c, i) => {
     const d = document.createElement("div"); d.className = "clip" + (c.pending ? " pending" : ""); d.draggable = !c.pending; d.dataset.id = c.id;
@@ -414,12 +432,24 @@ async function runJob(fn) {
 }
 // A render is a record in storage while it runs; each finished segment is stored as it lands. If the
 // engine deadlocks, we store the fact, reload the page, and boot() resumes from the stored segments.
-async function startRender({ resumeMap = null, record = null } = {}) {
+async function startRender({ resumeMap = null, record = null, mode = "movie" } = {}) {
   await runJob(async progress => {
     $("#result").style.display = "none";
     const ready = clips.filter(x => !x.pending);
-    const rec = record || { active: true, settings: JSON.parse(JSON.stringify(state)), clipIds: ready.map(c => c.id), threads: engine.threads, stalls: 0, startedAt: Date.now() };
+    const rec = record || { active: true, mode, settings: JSON.parse(JSON.stringify(state)), clipIds: ready.map(c => c.id), threads: engine.threads, stalls: 0, startedAt: Date.now() };
+    mode = rec.mode || "movie";
     if (!record) { await DB.clear("seg"); await DB.set("kv", "render", rec); }
+    if (mode === "trailer" && !rec.trailer) {
+      // listen to each clip once; the plan is stored so a resume renders exactly the same trailer
+      const plans = planNights(state, ready);
+      const analyses = {};
+      for (let i = 0; i < ready.length; i++) {
+        progress(0.01 * i / ready.length, `Listening to clip ${i + 1} of ${ready.length} for the loud parts…`);
+        analyses[i] = ready[i].meta.has_audio ? await engine._analyze(ready[i].file, plans[i].start, plans[i].duration) : [];
+      }
+      rec.trailer = planTrailer(state, ready, analyses, +state.trailer_length || 60);
+      await DB.set("kv", "render", rec);
+    }
     const r = new Renderer(engine, state, ready, progress, {
       resume: resumeMap,
       onSegment: s => DB.set("seg", s.name, { name: s.name, blob: s.blob, duration: s.duration }),
@@ -436,9 +466,9 @@ async function startRender({ resumeMap = null, record = null } = {}) {
         await new Promise(() => {}); // the page is going away
       },
     });
-    const blob = await r.run();
+    const blob = mode === "trailer" ? await r.runTrailer(rec.trailer) : await r.run();
     rec.active = false; await DB.set("kv", "render", rec); await DB.clear("seg");
-    const name = ((state.output_name || state.title || "ghostcut").replace(/[^A-Za-z0-9 ._-]+/g, "").trim() || "ghostcut") + ".mp4";
+    const name = ((state.output_name || state.title || "ghostcut").replace(/[^A-Za-z0-9 ._-]+/g, "").trim() || "ghostcut") + (mode === "trailer" ? " - Trailer" : "") + ".mp4";
     if ($("#player").src) URL.revokeObjectURL($("#player").src);
     const url = URL.createObjectURL(blob);
     $("#player").src = url; $("#dl").href = url; $("#dl").download = name;
@@ -446,7 +476,8 @@ async function startRender({ resumeMap = null, record = null } = {}) {
     $("#result").style.display = "block"; $("#player").scrollIntoView({ behavior: "smooth", block: "center" });
   });
 }
-$("#render").addEventListener("click", () => startRender());
+$("#render").addEventListener("click", () => startRender({ mode: "movie" }));
+$("#trailer").addEventListener("click", () => startRender({ mode: "trailer" }));
 $("#pvClose").addEventListener("click", () => { $("#modal").classList.remove("on"); $("#pv").pause(); if ($("#pv").src) URL.revokeObjectURL($("#pv").src); $("#pv").removeAttribute("src"); $("#pv").load(); });
 $("#modal").addEventListener("click", e => { if (e.target === e.currentTarget) $("#pvClose").click(); });
 $("#reset").addEventListener("click", async () => {
@@ -472,7 +503,7 @@ async function boot() {
       if (ordered.length && ordered.length === rec.clipIds.length) {
         clips = ordered; state = Object.assign(defaultProject(), rec.settings || {}); save(); fillSettings(); renderClips();
         const segs = (await DB.all("seg")) || [];
-        setMsg(`Resuming your render after an engine restart (${segs.length} segment${segs.length === 1 ? "" : "s"} already done)…`);
+        setMsg(`Resuming your ${rec.mode === "trailer" ? "trailer" : "render"} after an engine restart (${segs.length} segment${segs.length === 1 ? "" : "s"} already done)…`);
         await engineReady();
         if (rec.threads) engine.threads = rec.threads;
         startRender({ resumeMap: new Map(segs.map(s => [s.name, s])), record: rec });
@@ -485,7 +516,7 @@ async function boot() {
 }
 boot();
 // exposed for tests
-window.__ghostcut = { engine, DB, get clips() { return clips; }, get state() { return state; }, set state(s) { state = s; save(); fillSettings(); renderClips(); } };
+window.__ghostcut = { engine, DB, planTrailer, get clips() { return clips; }, get state() { return state; }, set state(s) { state = s; save(); fillSettings(); renderClips(); } };
 </script>
 </body>
 </html>

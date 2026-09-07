@@ -145,6 +145,20 @@
       </select></label>
       <label class="f">Output file name <input type="text" data-k="output_name" placeholder="(uses the title)"></label>
     </div>
+
+    <div class="panel" style="margin-top:14px">
+      <h2>The trailer</h2>
+      <p class="hint" style="margin:0 0 8px">“Create trailer” listens to every clip for the loudest, most sudden moments (screams, bangs, doors),
+        then cuts them into a trailer: quiet setup shots, escalating hits with static, a fast montage under a rising shriek, a silence, the
+        single scariest moment, and the title slamming in.</p>
+      <label class="f">Length <select data-k="trailer_length">
+        <option value="45">About 45 seconds</option>
+        <option value="60">About 60 seconds</option>
+        <option value="90">About 90 seconds</option>
+      </select></label>
+      <label class="f">Taglines (one per line, in order: opening, mid, late, closing)
+        <textarea data-k="trailer_taglines" placeholder="THIS HALLOWEEN&#10;SOMETHING IS IN THE HOUSE&#10;NO ONE WILL BELIEVE THEM&#10;COMING SOON"></textarea></label>
+    </div>
   </aside>
 
   <section>
@@ -183,7 +197,10 @@
         <div class="row"><a id="dl" href="#" download>Download the movie</a><span class="hint" id="outPath"></span></div>
       </div>
     </div>
-    <div><button class="primary" id="render" style="padding:14px 28px;font-size:16px">Render the movie</button></div>
+    <div style="display:flex;flex-direction:column;gap:8px">
+      <button class="primary" id="render" style="padding:14px 28px;font-size:16px">Render the movie</button>
+      <button id="trailer" style="padding:10px 28px">Create trailer</button>
+    </div>
   </div>
 </footer>
 
@@ -372,15 +389,19 @@
     clearErr(); $('#result').style.display = 'none'; previewing = false;
     try { await api('/api/render', {}); startPolling(); } catch (e) { showErr(e); }
   });
+  $('#trailer').addEventListener('click', async () => {
+    clearErr(); $('#result').style.display = 'none'; previewing = false;
+    try { await api('/api/trailer', {}); startPolling(); } catch (e) { showErr(e); }
+  });
   function startPolling() {
     if (polling) return;
-    $('#render').disabled = true; $('#bar').style.width = '0%';
+    $('#render').disabled = true; $('#trailer').disabled = true; $('#bar').style.width = '0%';
     polling = setInterval(async () => {
       let s; try { s = await api('/api/status'); } catch (e) { return; }
       $('#bar').style.width = (s.running ? s.percent : (s.error ? 0 : 100)) + '%';
       setMsg(s.running ? `${s.percent.toFixed(0)}% · ${s.message} · ${fmt(s.elapsed)} elapsed` : (s.error ? 'Failed' : 'Done'));
       if (!s.running) {
-        clearInterval(polling); polling = null; $('#render').disabled = !(state.clips || []).length;
+        clearInterval(polling); polling = null; $('#render').disabled = !(state.clips || []).length; $('#trailer').disabled = $('#render').disabled;
         if (s.error) showErr(new Error(s.error));
         else if (s.output) {
           if (previewing) { $('#pv').src = s.output; $('#modal').classList.add('on'); previewing = false; setMsg(''); $('#bar').style.width = '0%'; }

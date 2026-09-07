@@ -60,6 +60,19 @@ the one to use.
 6. **Render.** Progress shows in the bar; the finished `.mp4` plays right in
    the page and lands in `workspace/output/`.
 
+## Create trailer
+
+The **Create trailer** button (both editions) cuts a 45, 60 or 90 second
+trailer from the same clips. It listens to every clip for the loudest and
+most sudden sounds, screams, bangs, doors, and builds around them: black,
+tagline slam, a few quiet setup shots fading through black, a second tagline,
+escalating hits separated by TV static with a sub-bass boom on each, a third
+tagline, a fast montage of sub-second shots with white flashes under a rising
+shriek, silence, the single scariest moment with the jump-scare treatment,
+static, and the title slamming in with a boom, then "COMING SOON". The four
+taglines are editable in the Trailer panel. Trailers render in a fraction of
+the movie's time because only the chosen moments are processed.
+
 ## What it does to the footage
 
 - Opening: black, typewriter disclaimer with key clicks, title card with slow
