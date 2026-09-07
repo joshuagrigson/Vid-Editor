@@ -530,7 +530,7 @@ export class Renderer {
     vf += `fade=t=out:st=${f3(duration - fadeOut)}:d=${fadeOut},noise=alls=7:allf=t,eq=brightness='0.012*sin(t*31)':eval=frame,format=yuv420p`;
     const audio = boom ? `${BOOM},apad` : `anullsrc=r=${AR}:cl=stereo`;
     const w = duration * 0.25;
-    await this.eng.exec(["-loop", "1", "-framerate", String(FPS), "-threads", "1", "-i", name + ".png", "-f", "lavfi", "-i", audio,
+    await this.eng.exec(["-loop", "1", "-framerate", String(FPS), "-threads", "1", "-i", name + ".png", "-f", "lavfi", "-threads", "1", "-i", audio,
       "-t", f3(duration), "-vf", vf, ...ENC, name + ".mp4"], duration, this.job(w, label), label);
     await this.eng.ff.deleteFile(name + ".png");
     this.finish(w); await this.push(name, duration);
@@ -551,15 +551,17 @@ export class Renderer {
   }
 
   async renderBlack(name, duration) {
-    await this.eng.exec(["-f", "lavfi", "-i", `color=c=black:s=${this.W}x${this.H}:r=${FPS}:d=${f3(duration)}`, "-f", "lavfi", "-i", `anullsrc=r=${AR}:cl=stereo`,
+    await this.eng.exec(["-f", "lavfi", "-i", `color=c=black:s=${this.W}x${this.H}:r=${FPS}:d=${f3(duration)}`, "-f", "lavfi", "-threads", "1", "-i", `anullsrc=r=${AR}:cl=stereo`,
       "-t", f3(duration), "-vf", "format=yuv420p", "-shortest", ...ENC, name + ".mp4"], 0, null, "black");
     await this.push(name, duration);
   }
 
   async renderStatic(name, duration = 0.2) {
-    const vsrc = `color=c=black:s=${this.W}x${this.H}:r=${FPS}:d=${f3(duration)},format=gray,geq=lum='random(1)*255',format=yuv420p`;
-    await this.eng.exec(["-f", "lavfi", "-i", vsrc, "-f", "lavfi", "-i", `anoisesrc=color=white:amplitude=0.55:r=${AR}:d=${f3(duration)}`,
-      "-t", f3(duration), "-shortest", ...ENC, name + ".mp4"], 0, null, "static burst");
+    // The noise is drawn in the main -vf graph, not inside the lavfi source: a lavfi input runs its own
+    // filter graph with one thread per CPU core, ignoring the caps, which deadlocks the wasm engine on big machines.
+    await this.eng.exec(["-f", "lavfi", "-i", `color=c=black:s=${this.W}x${this.H}:r=${FPS}:d=${f3(duration)}`,
+      "-f", "lavfi", "-threads", "1", "-i", `anoisesrc=color=white:amplitude=0.55:r=${AR}:d=${f3(duration)}`,
+      "-t", f3(duration), "-vf", "format=gray,geq=lum='random(1)*255',format=yuv420p", "-shortest", ...ENC, name + ".mp4"], 0, null, "static burst");
     await this.push(name, duration);
   }
 

@@ -787,10 +787,12 @@ class Renderer:
 
     def render_static(self, name: str, duration: float = 0.2) -> str:
         out = self._seg(name)
-        vsrc = (f"color=c=black:s={self.W}x{self.H}:r={FPS}:d={duration:.3f},format=gray,"
-                "geq=lum='random(1)*255',format=yuv420p")
+        # noise drawn in the main -vf graph (a lavfi source's own graph ignores thread caps; matters for the wasm edition,
+        # kept identical here so both editions produce the same segment)
+        vsrc = f"color=c=black:s={self.W}x{self.H}:r={FPS}:d={duration:.3f}"
         asrc = f"anoisesrc=color=white:amplitude=0.55:r={AUDIO_RATE}:d={duration:.3f}"
-        args = ["-f", "lavfi", "-i", vsrc, "-f", "lavfi", "-i", asrc, "-t", f"{duration:.3f}", "-shortest"] + ENC_INTER + [out]
+        args = ["-f", "lavfi", "-i", vsrc, "-f", "lavfi", "-i", asrc, "-t", f"{duration:.3f}",
+                "-vf", "format=gray,geq=lum='random(1)*255',format=yuv420p", "-shortest"] + ENC_INTER + [out]
         run_ffmpeg(args, duration, None, os.path.join(self.build, name + ".log"))
         self.segments.append((out, duration))
         return out
