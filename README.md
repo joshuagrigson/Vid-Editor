@@ -60,6 +60,12 @@ the one to use.
 6. **Render.** Progress shows in the bar; the finished `.mp4` plays right in
    the page and lands in `workspace/output/`.
 
+Every look in the Look panel carries a live thumbnail of your own footage
+with that look applied (a mock hallway until you add clips), and picking a
+sound bed plays six seconds of it immediately. The trailer toggles demo
+themselves on the small preview above them: booms and static play, flashes
+flash, shake shakes, black & white greys the picture.
+
 ## Sound
 
 The **Sound** panel picks the bed that plays under the whole movie or

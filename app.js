@@ -390,6 +390,37 @@ export async function makeTypewriterFrames(W, H, text, hold = 34) {
   return frames;
 }
 
+// A stand-in frame for previews before any footage exists: a dark hallway with a lit doorway and a figure in it.
+export async function makeSampleFrame(W, H) {
+  const c = document.createElement("canvas"); c.width = W; c.height = H;
+  const ctx = c.getContext("2d");
+  const g = ctx.createLinearGradient(0, 0, 0, H); g.addColorStop(0, "#2a2622"); g.addColorStop(1, "#0a0908");
+  ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+  // floor
+  const fg = ctx.createLinearGradient(0, H * 0.62, 0, H); fg.addColorStop(0, "#3a332c"); fg.addColorStop(1, "#120f0c");
+  ctx.fillStyle = fg; ctx.fillRect(0, H * 0.62, W, H * 0.38);
+  ctx.strokeStyle = "rgba(255,235,200,0.08)"; ctx.lineWidth = Math.max(1, W / 480);
+  for (let i = 0; i < 9; i++) { ctx.beginPath(); ctx.moveTo(W * 0.5 + (i - 4) * W * 0.02, H * 0.62); ctx.lineTo(W * 0.5 + (i - 4) * W * 0.22, H); ctx.stroke(); }
+  // left wall picture frame
+  ctx.fillStyle = "#1b1815"; ctx.fillRect(W * 0.12, H * 0.22, W * 0.12, H * 0.18);
+  ctx.strokeStyle = "#3d352c"; ctx.lineWidth = Math.max(2, W / 240); ctx.strokeRect(W * 0.12, H * 0.22, W * 0.12, H * 0.18);
+  // doorway with light spilling in
+  const dx = W * 0.6, dw = W * 0.16, dy = H * 0.14, dh = H * 0.5;
+  const dg = ctx.createLinearGradient(dx, 0, dx + dw, 0); dg.addColorStop(0, "#c9b79a"); dg.addColorStop(1, "#6f6252");
+  ctx.fillStyle = dg; ctx.fillRect(dx, dy, dw, dh);
+  ctx.fillStyle = "rgba(201,183,154,0.18)"; ctx.beginPath(); ctx.moveTo(dx, dy + dh); ctx.lineTo(dx + dw, dy + dh); ctx.lineTo(dx + dw * 2.2, H); ctx.lineTo(dx - dw * 0.6, H); ctx.closePath(); ctx.fill();
+  // the figure
+  ctx.fillStyle = "#15120f";
+  const fx = dx + dw * 0.52, fyTop = dy + dh * 0.22, fh = dh * 0.78;
+  ctx.beginPath(); ctx.arc(fx, fyTop, dw * 0.13, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath(); ctx.moveTo(fx - dw * 0.22, fyTop + dw * 0.16); ctx.lineTo(fx + dw * 0.22, fyTop + dw * 0.16); ctx.lineTo(fx + dw * 0.26, dy + dh); ctx.lineTo(fx - dw * 0.26, dy + dh); ctx.closePath(); ctx.fill();
+  // vignette-ish darkness in corners
+  const vg = ctx.createRadialGradient(W * 0.5, H * 0.5, H * 0.3, W * 0.5, H * 0.5, H * 0.95);
+  vg.addColorStop(0, "rgba(0,0,0,0)"); vg.addColorStop(1, "rgba(0,0,0,0.55)");
+  ctx.fillStyle = vg; ctx.fillRect(0, 0, W, H);
+  return canvasToPng(c);
+}
+
 export async function makeScanlines(W, H, strength = 46, period = 3) {
   const c = document.createElement("canvas"); c.width = W; c.height = H;
   const ctx = c.getContext("2d");
@@ -783,6 +814,41 @@ export class Renderer {
       for (const f of ["concat.txt", "final.txt"]) try { await this.eng.ff.deleteFile(f); } catch (_) {}
       return await this.eng.take(outName);
     } finally { await this.eng.unmount("/segs"); if (sound) await this.eng.unmount("/snd"); }
+  }
+
+  // One small frame with a look applied, for the look picker. file = null → the synthetic hallway.
+  async previewLook(style, file, at = 1, W = 480, H = 270) {
+    const eng = this.eng;
+    const inputs = [];
+    let mounted = false;
+    if (file) {
+      const safe = safeName(file.name);
+      await eng.mountFiles([new File([file], safe)], "/probe"); mounted = true;
+      inputs.push("-ss", f3(at), "-i", `/probe/${safe}`);
+    } else {
+      await eng.ff.writeFile("sample.png", await makeSampleFrame(W, H));
+      inputs.push("-threads", "1", "-i", "sample.png");
+    }
+    try {
+      let nIn = 1;
+      const graph = [`[0:v]scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H},setsar=1,format=yuv420p[base]`];
+      let cur = "[base]";
+      graph.push(`${cur}${styleVideoChain(eng, style, W, H)}[fx]`); cur = "[fx]";
+      if (STYLES[style]?.scanlines) {
+        await eng.ff.writeFile("lscan.png", await makeScanlines(W, H, 46, 2));
+        inputs.push("-threads", "1", "-i", "lscan.png"); graph.push(`${cur}[${nIn}:v]overlay=0:0:format=yuv420[sl]`); cur = "[sl]"; nIn++;
+      }
+      if (this.p.timestamps !== false && STYLES[style]?.clock) {
+        const [png] = await makeTimestampFrames(W, H, style, 1, new Date(2026, 9, 31, 2, 13, 47), 1);
+        await eng.ff.writeFile("lts.png", png);
+        inputs.push("-threads", "1", "-i", "lts.png"); graph.push(`${cur}[${nIn}:v]overlay=0:0:format=yuv420[ts]`); cur = "[ts]"; nIn++;
+      }
+      graph.push(`${cur}format=yuv420p[vout]`);
+      await eng.ff.writeFile("look.txt", graph.join(";\n") + "\n");
+      await eng.exec([...inputs, "-filter_complex_script", "look.txt", "-map", "[vout]", "-frames:v", "1", "-q:v", "4", "look.jpg"], 0, null, `look preview (${style})`);
+      for (const f of ["look.txt", "lscan.png", "lts.png", "sample.png"]) try { await eng.ff.deleteFile(f); } catch (_) {}
+      return await eng.take("look.jpg");
+    } finally { if (mounted) await eng.unmount("/probe"); }
   }
 
   // Six seconds of the chosen sound bed, for auditioning. Returns an audio Blob (m4a).
