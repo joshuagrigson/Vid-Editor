@@ -236,6 +236,43 @@ def make_typewriter_frames(folder: str, W: int, H: int, text: str, hold_frames: 
     return n
 
 
+def make_sample_frame(path: str, W: int, H: int) -> None:
+    """A stand-in frame for look previews before any footage exists: dark hallway, lit doorway, a figure."""
+    from PIL import Image, ImageDraw
+
+    img = Image.new("RGB", (W, H), (10, 9, 8))
+    d = ImageDraw.Draw(img)
+    for y in range(H):  # wall gradient
+        t = y / max(1, H - 1)
+        c = tuple(int(a + (b - a) * t) for a, b in zip((42, 38, 34), (10, 9, 8)))
+        d.line([(0, y), (W, y)], fill=c)
+    fy = int(H * 0.62)
+    for y in range(fy, H):  # floor gradient
+        t = (y - fy) / max(1, H - fy)
+        c = tuple(int(a + (b - a) * t) for a, b in zip((58, 51, 44), (18, 15, 12)))
+        d.line([(0, y), (W, y)], fill=c)
+    for i in range(9):  # floor boards in perspective
+        d.line([(W * 0.5 + (i - 4) * W * 0.02, fy), (W * 0.5 + (i - 4) * W * 0.22, H)], fill=(60, 55, 48), width=max(1, W // 480))
+    d.rectangle([W * 0.12, H * 0.22, W * 0.24, H * 0.40], fill=(27, 24, 21), outline=(61, 53, 44), width=max(2, W // 240))
+    dx, dw, dy, dh = W * 0.6, W * 0.16, H * 0.14, H * 0.5
+    for x in range(int(dx), int(dx + dw)):  # doorway light
+        t = (x - dx) / dw
+        c = tuple(int(a + (b - a) * t) for a, b in zip((201, 183, 154), (111, 98, 82)))
+        d.line([(x, dy), (x, dy + dh)], fill=c)
+    d.polygon([(dx, dy + dh), (dx + dw, dy + dh), (dx + dw * 2.2, H), (dx - dw * 0.6, H)], fill=(70, 62, 52))
+    fx, ft = dx + dw * 0.52, dy + dh * 0.22
+    d.ellipse([fx - dw * 0.13, ft - dw * 0.13, fx + dw * 0.13, ft + dw * 0.13], fill=(21, 18, 15))
+    d.polygon([(fx - dw * 0.22, ft + dw * 0.16), (fx + dw * 0.22, ft + dw * 0.16), (fx + dw * 0.26, dy + dh), (fx - dw * 0.26, dy + dh)], fill=(21, 18, 15))
+    # corner darkening
+    vig = Image.new("L", (W, H), 0)
+    vd = ImageDraw.Draw(vig)
+    for r in range(int(H * 0.95), int(H * 0.3), -4):
+        a = int(255 * 0.55 * (r - H * 0.3) / (H * 0.65))
+        vd.ellipse([W * 0.5 - r * 1.3, H * 0.5 - r, W * 0.5 + r * 1.3, H * 0.5 + r], fill=255 - a)
+    img = Image.composite(img, Image.new("RGB", (W, H), (0, 0, 0)), vig)
+    img.save(path, "PNG")
+
+
 def make_scanlines(path: str, W: int, H: int, strength: int = 46, period: int = 3) -> None:
     from PIL import Image, ImageDraw
 
@@ -1102,12 +1139,53 @@ class Renderer:
         run_ffmpeg(args, total, self._job(weight, "Final assembly"), os.path.join(self.build, "final.log"))
         self._finish(weight)
 
-    def preview_bed(self, out_path: str) -> str:
+    def preview_look(self, style: str, out_path: str, clip: dict | None = None, W: int = 480, H: int = 270) -> str:
+        """One small frame with a look applied, for the look picker. clip=None → the synthetic hallway."""
+        os.makedirs(self.build, exist_ok=True)
+        tag = f"{style}_{W}x{H}"
+        if clip:
+            src = os.path.join(self.ws, "clips", clip["file"])
+            inputs = ["-ss", f"{min(1.0, clip['meta']['duration'] / 2):.2f}", "-i", src]
+        else:
+            sample = os.path.join(self.build, f"sample_{W}x{H}.png")
+            if not os.path.exists(sample):
+                make_sample_frame(sample, W, H)
+            inputs = ["-i", sample]
+        graph = [f"[0:v]scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},setsar=1,format=yuv420p[base]",
+                 f"[base]{style_video_chain(style, W, H)}[fx]"]
+        cur, n_in = "[fx]", 1
+        if STYLES.get(style, {}).get("scanlines"):
+            scan = os.path.join(self.build, f"scan_{W}x{H}_p2.png")
+            if not os.path.exists(scan):
+                make_scanlines(scan, W, H, 46, 2)
+            inputs += ["-i", scan]
+            graph.append(f"{cur}[{n_in}:v]overlay=0:0:format=auto[sl]")
+            cur, n_in = "[sl]", n_in + 1
+        if self.proj.get("timestamps", True) and STYLES.get(style, {}).get("clock"):
+            folder = os.path.join(self.build, f"lookts_{tag}")
+            if not os.path.exists(os.path.join(folder, "ts_0000.png")):
+                make_timestamp_frames(folder, W, H, style, 1, dt.datetime(2026, 10, 31, 2, 13, 47), 1)
+            inputs += ["-i", os.path.join(folder, "ts_0000.png")]
+            graph.append(f"{cur}[{n_in}:v]overlay=0:0:format=auto[ts]")
+            cur, n_in = "[ts]", n_in + 1
+        graph.append(f"{cur}format=yuv420p[vout]")
+        script = os.path.join(self.build, f"look_{tag}.filters.txt")
+        with open(script, "w", encoding="utf-8") as f:
+            f.write(";\n".join(graph) + "\n")
+        run_ffmpeg(inputs + ["-filter_complex_script", script, "-map", "[vout]", "-frames:v", "1", "-q:v", "4", out_path],
+                   0, None, os.path.join(self.build, f"look_{tag}.log"))
+        return out_path
+
+    def preview_bed(self, out_path: str, kind: str | None = None) -> str:
         """Six seconds of the chosen sound bed, for auditioning."""
-        kind = self.proj.get("bed") or "drone"
-        sound = self.sound_path()
+        kind = kind or self.proj.get("bed") or "drone"
+        sound = self.sound_path() if kind == "custom" else None
+        if kind == "custom" and not sound:
+            snd = os.path.join(self.ws, "sound")
+            names = [n for n in (os.listdir(snd) if os.path.isdir(snd) else []) if os.path.splitext(n)[1].lower() in AUDIO_EXTS]
+            sound = os.path.join(snd, names[0]) if names else None
         inputs = ["-stream_loop", "-1", "-i", sound] if sound else ["-f", "lavfi", "-i", f"anullsrc=r={AUDIO_RATE}:cl=stereo"]
-        bed = bed_graph(kind, 6, max(0.2, float(self.proj.get("drone") or 0.5)), 0 if sound else None)
+        bed = bed_graph(kind, 6, 1.0, 0 if sound else None)   # full gain; the page sets playback volume
         if not bed:
             raise FriendlyError("Silence has nothing to listen to." if kind == "none" else "Choose a sound file first.")
         bed[-1] = re.sub(r",afade=t=in[^\[]*\[bed\]$", ",afade=t=out:st=5.3:d=0.7[bed]", bed[-1])
@@ -1492,6 +1570,22 @@ def make_handler(ws: Workspace, job: RenderJob):
                     if rel.startswith("..") or os.path.isabs(rel):
                         return self._json({"error": "bad path"}, 400)
                     return self._file(os.path.join(ws.root, rel))
+                m = re.fullmatch(r"/api/look/([a-z]+)\.jpg", p)
+                if m:
+                    # one frame of the first clip (or the sample hallway) with this look, rendered on demand and cached
+                    style = m.group(1)
+                    if style not in STYLES:
+                        return self._json({"error": "unknown look"}, 404)
+                    q = parse_qs(u.query)
+                    clip = next((c for c in ws.proj["clips"] if c["id"] == q.get("clip", [""])[0]), None)
+                    ts = "1" if ws.proj.get("timestamps", True) else "0"
+                    out = os.path.join(ws.previews_dir, f"look_{style}_{clip['id'] if clip else 'sample'}_{ts}.jpg")
+                    if not os.path.exists(out):
+                        try:
+                            Renderer(json.loads(json.dumps(ws.proj)), ws.root).preview_look(style, out, clip)
+                        except (RenderError, FriendlyError) as e:
+                            return self._json({"error": str(e)}, 500)
+                    return self._file(out, "image/jpeg")
                 return self._json({"error": "not found"}, 404)
             except FriendlyError as e:
                 return self._json({"error": str(e)}, 400)
@@ -1607,16 +1701,21 @@ def make_handler(ws: Workspace, job: RenderJob):
                     shutil.rmtree(os.path.join(ws.root, "sound"), ignore_errors=True)
                     return self._json(ws.public_state())
                 if p == "/api/listen":
+                    # renders synchronously (well under a second natively); cached per bed, custom keyed by file
                     proj = json.loads(json.dumps(ws.proj))
-                    dest = os.path.join(ws.previews_dir, f"bed_{int(time.time())}.m4a")
-
-                    def work(progress):
-                        progress(0.1, "Rendering the sound bed…")
-                        Renderer(proj, ws.root, progress).preview_bed(dest)
-                        return "/files/previews/" + os.path.basename(dest)
-
-                    job.start(work)
-                    return self._json(job.status())
+                    kind = data.get("bed") or proj.get("bed") or "drone"
+                    if kind not in BEDS:
+                        raise FriendlyError("Unknown sound bed.")
+                    key = kind
+                    if kind == "custom":
+                        sn = ws.public_state().get("sound_name")
+                        if not sn:
+                            raise FriendlyError("Choose a sound file first.")
+                        key = "custom_" + re.sub(r"[^A-Za-z0-9]+", "_", sn) + f"_{os.path.getsize(os.path.join(ws.root, 'sound', sn))}"
+                    dest = os.path.join(ws.previews_dir, f"bed_{key}.m4a")
+                    if not os.path.exists(dest):
+                        Renderer(proj, ws.root).preview_bed(dest, kind)
+                    return self._json({"output": "/files/previews/" + os.path.basename(dest), "bed": kind})
                 if p == "/api/trailer":
                     proj = json.loads(json.dumps(ws.proj))
                     name = re.sub(r"[^A-Za-z0-9 ._-]+", "", proj.get("output_name") or proj["title"] or "ghostcut").strip() or "ghostcut"
