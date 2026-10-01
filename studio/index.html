@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FrightCut Studio</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 100 100%27%3E%3Ctext y=%27.9em%27 font-size=%2790%27%3E%F0%9F%91%BB%3C/text%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Creepster&family=Special+Elite&family=Nosifer&family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="studio.css">
+</head>
+<body>
+<header id="top">
+  <div class="brand"><span class="logo">FrightCut</span><span class="sub">Studio</span></div>
+  <input id="projName" class="projname" value="Untitled Nightmare" spellcheck="false" title="Project name">
+  <div class="topbtns">
+    <button id="undo" title="Undo (Ctrl+Z)">↶</button>
+    <button id="redo" title="Redo (Ctrl+Shift+Z)">↷</button>
+    <select id="aspect" title="Frame shape">
+      <option value="auto">Auto frame</option>
+      <option value="9:16">Portrait 9:16</option>
+      <option value="16:9">Widescreen 16:9</option>
+      <option value="1:1">Square 1:1</option>
+    </select>
+    <select id="fit" title="When a clip doesn't match the frame">
+      <option value="blur">Fill: blurred sides</option>
+      <option value="cover">Fill: crop</option>
+      <option value="contain">Fill: black bars</option>
+    </select>
+    <button id="newProj" title="Start a new, empty project">New</button>
+    <button id="exportBtn" class="primary">Export movie</button>
+  </div>
+</header>
+
+<main id="workspace">
+  <aside id="library">
+    <nav id="tabs">
+      <button data-tab="media" class="on">🎞️<span>Media</span></button>
+      <button data-tab="looks">🎨<span>Looks</span></button>
+      <button data-tab="effects">✨<span>Effects</span></button>
+      <button data-tab="scares">😱<span>Scares</span></button>
+      <button data-tab="text">🔤<span>Text &amp; HUD</span></button>
+      <button data-tab="stickers">👻<span>Spooks</span></button>
+      <button data-tab="sounds">🔊<span>Sounds</span></button>
+      <button data-tab="transitions">⚡<span>Cuts</span></button>
+    </nav>
+    <div id="panel"></div>
+  </aside>
+
+  <section id="stage">
+    <div id="viewerWrap">
+      <canvas id="viewer"></canvas>
+      <div id="dropHint">
+        <div class="big">Drop your scary clips here</div>
+        <div>Videos and photos straight from the phone. Nothing is uploaded: everything stays on this computer.</div>
+        <button id="importBtn2" class="primary">Choose clips…</button>
+      </div>
+    </div>
+    <div id="transport">
+      <button id="toStart" title="Go to start (Home)">⏮</button>
+      <button id="prevFrame" title="Back one frame (←)">◀︎</button>
+      <button id="play" class="play" title="Play / pause (Space)">▶</button>
+      <button id="nextFrame" title="Forward one frame (→)">▶︎</button>
+      <span id="timecode">0:00.00 / 0:00.00</span>
+      <span class="grow"></span>
+      <button id="splitBtn" title="Split the clip at the playhead (S)">✂ Split</button>
+      <button id="delBtn" title="Delete the selected item (Delete)">🗑</button>
+      <label class="vol" title="Preview volume">🔈<input id="masterVol" type="range" min="0" max="1" step="0.01" value="0.9"></label>
+    </div>
+  </section>
+
+  <aside id="inspector">
+    <div id="inspectorBody"><div class="empty">Select a clip or anything on the timeline to change it.</div></div>
+  </aside>
+</main>
+
+<section id="timelineWrap">
+  <div id="tlTools">
+    <span class="tlLabel">Timeline</span>
+    <span class="hint">Drag clips to reorder · drag edges to trim · click the ruler to move the playhead</span>
+    <span class="grow"></span>
+    <button id="zoomOut" title="Zoom out">−</button>
+    <button id="zoomFit" title="Fit the whole movie">Fit</button>
+    <button id="zoomIn" title="Zoom in">+</button>
+  </div>
+  <div id="timeline">
+    <div id="tlHeads">
+      <div class="head ruler"></div>
+      <div class="head" data-track="video">🎞️ Video</div>
+      <div class="head" data-track="fx">✨ Effects</div>
+      <div class="head" data-track="overlay">🔤 Overlays</div>
+      <div class="head" data-track="sound">🔊 Sounds</div>
+    </div>
+    <div id="tlScroll">
+      <div id="tlInner">
+        <div id="ruler"></div>
+        <div class="track" data-track="video"></div>
+        <div class="track" data-track="fx"></div>
+        <div class="track" data-track="overlay"></div>
+        <div class="track" data-track="sound"></div>
+        <div id="playhead"><div class="knob"></div></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<input id="fileIn" type="file" accept="video/*,image/*,audio/*,.mov,.mp4,.m4v,.webm,.mkv" multiple hidden>
+<input id="audioIn" type="file" accept="audio/*,.mp3,.m4a,.wav,.ogg" hidden>
+
+<div id="modal" class="modal"><div class="card" id="modalCard"></div></div>
+<div id="toast"></div>
+
+<script type="module" src="js/app.js"></script>
+</body>
+</html>

@@ -4,3 +4,6 @@ workspace/
 __pycache__/
 *.py[cod]
 .DS_Store
+
+# FrightCut Studio test output
+studio/test/out/

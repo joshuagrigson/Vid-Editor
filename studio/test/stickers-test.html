@@ -1,0 +1,102 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>FrightCut stickers test</title>
+<style>body{background:#111;color:#ddd;font:13px monospace;padding:12px}.fail{color:#f66}.pass{color:#6f6}canvas{max-width:100%}</style>
+</head><body>
+<h3>FrightCut stickers.js test</h3>
+<pre id="log"></pre>
+<div id="out"></div>
+<script type="module">
+import { STICKERS, STICKER_CATEGORIES, drawSticker, stickerThumb } from '../js/stickers.js';
+const logEl = document.getElementById('log'), lines = [];
+const log = (s, cls) => { lines.push(s); const sp = document.createElement('span'); if (cls) sp.className = cls; sp.textContent = s + '\n'; logEl.appendChild(sp); };
+
+const STATE_KEYS = ['globalAlpha', 'globalCompositeOperation', 'filter', 'fillStyle', 'strokeStyle', 'lineWidth', 'shadowBlur', 'shadowColor', 'shadowOffsetX', 'font', 'lineCap', 'textAlign'];
+function snap(ctx) {
+  const m = ctx.getTransform(), s = { m: [m.a, m.b, m.c, m.d, m.e, m.f].map((v) => +v.toFixed(6)).join(',') };
+  for (const k of STATE_KEYS) s[k] = ctx[k];
+  return s;
+}
+function diff(a, b) { return Object.keys(a).filter((k) => a[k] !== b[k]).map((k) => `${k}: ${a[k]} -> ${b[k]}`); }
+
+(async () => {
+  let fails = 0, draws = 0;
+  const check = (ok, msg) => { if (!ok) { fails++; log('FAIL ' + msg, 'fail'); } return ok; };
+  check(STICKERS.length >= 35, `sticker count ${STICKERS.length} >= 35`);
+  const cats = new Set(STICKER_CATEGORIES.map((c) => c.id));
+  for (const s of STICKERS) check(cats.has(s.cat) && s.aspect > 0 && s.defaults && s.defaults.opacity === 1 && typeof s.anim === 'boolean', `${s.id} metadata`);
+  check(new Set(STICKERS.map((s) => s.id)).size === STICKERS.length, 'ids unique');
+
+  const S = 360;
+  const targets = [
+    ['canvas', (() => { const c = document.createElement('canvas'); c.width = S; c.height = S; return c.getContext('2d', { willReadFrequently: true }); })()],
+    ['offscreen', new OffscreenCanvas(S, S).getContext('2d', { willReadFrequently: true })],
+  ];
+  const T = [0, 0.8, 2.5, 7.3, 31.7];
+  const times = {};
+  for (const s of STICKERS) {
+    let ok = true, minFrac = 1; times[s.id] = { sum: 0, n: 0, max: 0 };
+    for (const [kind, ctx] of targets) {
+      for (const asp of [s.aspect, 1, 3, 1 / 3]) {
+        for (const t of T) {
+          let bw = 300, bh = bw / asp; if (bh > 300) { bh = 300; bw = bh * asp; }
+          ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.clearRect(0, 0, S, S);
+          // distinctive non-default caller state that must survive
+          ctx.setTransform(1.05, 0, 0, 1.05, 3, 4); ctx.globalAlpha = 0.93; ctx.globalCompositeOperation = 'source-over'; ctx.filter = 'none';
+          ctx.fillStyle = '#123456'; ctx.strokeStyle = '#654321'; ctx.lineWidth = 3; ctx.font = '13px serif'; ctx.lineCap = 'square'; ctx.textAlign = 'right';
+          const before = snap(ctx), a = performance.now();
+          const opts = t === 2.5 ? { flip: true, opacity: 0.6, seed: 7 } : {};
+          try { drawSticker(ctx, s.id, 10, 10, bw, bh, t, opts); } catch (e) { ok = check(false, `${s.id} threw on ${kind} t=${t}: ${e}`) && ok; continue; }
+          const ms = performance.now() - a; times[s.id].sum += ms; times[s.id].n++; times[s.id].max = Math.max(times[s.id].max, ms); draws++;
+          const d = diff(before, snap(ctx));
+          ok = check(d.length === 0, `${s.id} ${kind} t=${t} state leaked: ${d.join('; ')}`) && ok;
+          // count drawn pixels inside the (transformed) box
+          const x0 = Math.floor(3 + 10 * 1.05), y0 = Math.floor(4 + 10 * 1.05), w = Math.ceil(bw * 1.05), h = Math.ceil(bh * 1.05);
+          const img = ctx.getImageData(x0, y0, Math.min(w, S - x0), Math.min(h, S - y0)).data;
+          let drawn = 0; for (let i = 3; i < img.length; i += 4) if (img[i] > 10) drawn++;
+          const frac = drawn / (img.length / 4); minFrac = Math.min(minFrac, frac);
+          ok = check(frac > 0.004, `${s.id} ${kind} aspect ${asp.toFixed(2)} t=${t}: only ${(frac * 100).toFixed(2)}% pixels drawn`) && ok;
+        }
+      }
+    }
+    // zero opacity draws nothing
+    const c0 = targets[0][1]; c0.setTransform(1, 0, 0, 1, 0, 0); c0.clearRect(0, 0, S, S); drawSticker(c0, s.id, 0, 0, 200, 200, 1, { opacity: 0 });
+    const z = c0.getImageData(0, 0, 200, 200).data; let any = 0; for (let i = 3; i < z.length; i += 4) if (z[i]) { any = 1; break; }
+    ok = check(!any, `${s.id} opacity 0 draws nothing`) && ok;
+    const th = stickerThumb(s.id, 96); ok = check(th.width === 96 && th.height === 96, `${s.id} thumb size`) && ok;
+    const tm = times[s.id];
+    log(`${ok ? 'ok  ' : 'BAD '} ${s.id.padEnd(16)} ${s.cat.padEnd(8)} min coverage ${(minFrac * 100).toFixed(1)}%  avg ${(tm.sum / tm.n).toFixed(2)}ms max ${tm.max.toFixed(2)}ms`, ok ? 'pass' : 'fail');
+  }
+  drawSticker(targets[0][1], 'nope', 0, 0, 10, 10, 0); // unknown id is a no-op
+  const all = Object.values(times), tot = all.reduce((a, b) => a + b.sum, 0);
+  log(`\n${draws} draws, avg ${(tot / draws).toFixed(2)}ms/draw; slowest: ` + Object.entries(times).sort((a, b) => b[1].max - a[1].max).slice(0, 4).map(([k, v]) => `${k} ${v.max.toFixed(1)}ms`).join(', '));
+
+  // ---- contact sheet
+  function sheet(tList, cell = 230, cols = 7) {
+    const rows = Math.ceil(STICKERS.length / cols), lab = 30, perT = tList.length;
+    const c = document.createElement('canvas'); c.width = cols * cell * perT; c.height = rows * (cell + lab);
+    const g = c.getContext('2d'); g.fillStyle = '#3a3a40'; g.fillRect(0, 0, c.width, c.height);
+    STICKERS.forEach((s, i) => {
+      const cx = (i % cols) * cell * perT, cy = Math.floor(i / cols) * (cell + lab);
+      tList.forEach((t, j) => {
+        const x = cx + j * cell; g.fillStyle = '#26262b'; g.fillRect(x + 4, cy + 4, cell - 8, cell - 8);
+        const a = Math.min(2.2, s.aspect); let w = cell - 24, h = w / a; if (h > cell - 24) { h = cell - 24; w = h * a; }
+        drawSticker(g, s.id, x + (cell - w) / 2, cy + (cell - h) / 2, w, h, t);
+      });
+      g.fillStyle = '#eee'; g.font = 'bold 15px sans-serif'; g.fillText(`${s.name}  [${s.id}]${perT > 1 ? '  t=' + tList.join('/') : ''}`, cx + 8, cy + cell + 20);
+    });
+    return c;
+  }
+  const sh = sheet([0.8]); document.getElementById('out').appendChild(sh);
+  const anim = sheet([0.2, 1.6, 3.4], 200, 3);
+  const thumbs = document.createElement('canvas'); thumbs.width = 96 * 10; thumbs.height = 96 * Math.ceil(STICKERS.length / 10);
+  STICKERS.forEach((s, i) => thumbs.getContext('2d').drawImage(stickerThumb(s.id, 96), (i % 10) * 96, Math.floor(i / 10) * 96));
+  log(fails ? `RESULT: FAIL (${fails} failures)` : 'RESULT: PASS', fails ? 'fail' : 'pass');
+  window.__report = { fails, lines, exports: {
+    '/home/user/vid-editor/studio/test/stickers-sheet': { png: sh.toDataURL('image/png') },
+    'stickers-anim': { png: anim.toDataURL('image/png') },
+    'stickers-thumbs': { png: thumbs.toDataURL('image/png') },
+  } };
+  window.__done = true;
+})().catch((e) => { log('FATAL ' + e.stack, 'fail'); window.__report = { fails: 1, lines, exports: {} }; window.__done = true; });
+</script>
+</body></html>
