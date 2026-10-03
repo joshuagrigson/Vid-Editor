@@ -157,3 +157,8 @@ input[type=color] { width: 36px; height: 26px; border: 1px solid var(--line); ba
 
 input[type=datetime-local] { color-scheme: dark; width: 100%; }
 select { color-scheme: dark; }
+
+#dropOverlay { position: fixed; inset: 0; z-index: 70; display: none; align-items: center; justify-content: center; text-align: center;
+  background: rgba(10,4,8,.78); border: 4px dashed var(--accent); color: var(--text); pointer-events: none; }
+#dropOverlay.on { display: flex; }
+#dropOverlay .big { font-family: Creepster, Impact, sans-serif; font-size: 64px; color: var(--accent2); }

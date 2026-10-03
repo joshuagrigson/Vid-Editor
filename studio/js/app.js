@@ -9,6 +9,7 @@ import { STICKERS, STICKER_CATEGORIES, stickerThumb } from "./stickers.js";
 import { TEXT_STYLES, HUDS, MOVES, loadFonts } from "./overlays.js";
 import { SCARES } from "./scares.js";
 import { exportMovie, pickCodecs, pickSaveFile } from "./export.js";
+import { filesFromDrop, ghostcutClips, onGhostCutSite, STUDIO_ON_GHOSTCUT } from "./bridge.js";
 
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -101,10 +102,61 @@ function newClip(m) {
 
 $("#fileIn").addEventListener("change", e => { addFiles(e.target.files); e.target.value = ""; });
 $("#importBtn2").addEventListener("click", () => $("#fileIn").click());
-const vw = $("#viewerWrap");
-["dragenter", "dragover"].forEach(ev => document.addEventListener(ev, e => { if (e.dataTransfer?.types?.includes("Files")) { e.preventDefault(); vw.classList.add("over"); } }));
-["dragleave", "drop"].forEach(ev => document.addEventListener(ev, e => { if (ev === "dragleave" && e.relatedTarget) return; vw.classList.remove("over"); }));
-document.addEventListener("drop", e => { if (e.dataTransfer?.files?.length) { e.preventDefault(); addFiles(e.dataTransfer.files); } });
+// Drop anything anywhere on the page: files from a folder, a clip or the finished movie from the GhostCut tab,
+// or a video link. Whatever can't be used gets an explanation instead of silence.
+const dropOv = h(`<div id="dropOverlay"><div><div class="big">Drop it in</div><div>Clips, photos or music, from a folder or the GhostCut tab</div></div></div>`);
+document.body.append(dropOv);
+let dragDepth = 0;
+const dragAccepts = e => {
+  const t = [...(e.dataTransfer?.types || [])];
+  if (!t.includes("Files") && e.target?.closest?.("input, textarea")) return false;   // let text drops into fields work
+  return t.includes("Files") || t.includes("text/uri-list") || t.includes("text/plain") || t.includes("text/html");
+};
+document.addEventListener("dragenter", e => { if (!dragAccepts(e)) return; e.preventDefault(); dragDepth++; dropOv.classList.add("on"); });
+// match what the source allows (GhostCut's clip cards only allow "move"), or the browser refuses the drop
+const dropEffectFor = ea => !ea || ["all", "uninitialized", "copy", "copyMove", "copyLink"].includes(ea) ? "copy" : ea.toLowerCase().includes("move") ? "move" : "link";
+document.addEventListener("dragover", e => { if (!dragAccepts(e)) return; e.preventDefault(); e.dataTransfer.dropEffect = dropEffectFor(e.dataTransfer.effectAllowed); });
+document.addEventListener("dragleave", e => { if (!dragAccepts(e)) return; dragDepth = Math.max(0, dragDepth - 1); if (!dragDepth) dropOv.classList.remove("on"); });
+document.addEventListener("drop", async e => {
+  dragDepth = 0; dropOv.classList.remove("on");
+  if (!dragAccepts(e)) return;
+  e.preventDefault();
+  const { files, unresolved } = await filesFromDrop(e.dataTransfer);
+  if (files.length) return addFiles(files);
+  if (unresolved) dropHelp(unresolved);
+});
+
+function dropHelp(u) {
+  const onGC = onGhostCutSite();
+  const why = u.fromGhostCut
+    ? (onGC ? "That clip isn't in GhostCut's saved list any more (it may have been cleared with Start fresh)."
+            : "That came from the GhostCut tab. Browsers lock each site's clips to that site, so this page isn't allowed to pick them up from GhostCut.")
+    : u.blob ? "That video only exists inside the other tab, and browsers don't let another page take it."
+    : "Only a picture or link came across, not the video file itself.";
+  modal.open(`<h2>Can't grab that one</h2><p class="note" style="font-size:13px">${esc(why)}</p>
+    ${u.fromGhostCut && !onGC ? `<p><b>Easiest:</b> open FrightCut on GhostCut's own site. There you can drag clips straight across, or bring in every GhostCut clip with one button.</p>
+      <div class="btnrow"><a href="${STUDIO_ON_GHOSTCUT}" target="_blank" rel="noopener" style="flex:1"><button class="primary" style="width:100%">Open FrightCut on GhostCut's site</button></a></div>` : ""}
+    <p><b>Always works:</b> drag the video file itself from a folder on your computer (Downloads, Phone Drop, or wherever the clips were saved). For a GhostCut movie, press <i>Save the movie</i> first, then drop the saved file here.</p>
+    <div class="btnrow"><button id="dhPick">Choose files…</button><button id="dhClose">OK</button></div>`);
+  $("#dhPick").onclick = () => { modal.close(); $("#fileIn").click(); };
+  $("#dhClose").onclick = () => modal.close();
+}
+
+async function importGhostCut() {
+  const rows = await ghostcutClips();
+  if (!rows.length && !onGhostCutSite()) {
+    modal.open(`<h2>GhostCut clips</h2><p class="note" style="font-size:13px">Your GhostCut clips are kept by the browser for GhostCut's site only, so this copy of FrightCut can't see them.</p>
+      <div class="btnrow"><a href="${STUDIO_ON_GHOSTCUT}" target="_blank" rel="noopener" style="flex:1"><button class="primary" style="width:100%">Open FrightCut on GhostCut's site</button></a><button id="gcClose">Close</button></div>`);
+    $("#gcClose").onclick = () => modal.close();
+    return;
+  }
+  if (!rows.length) return toast("GhostCut has no saved clips in this browser.", 3500);
+  const have = new Set([...media.values()].map(m => m.name + ":" + m.file.size));
+  const fresh = rows.filter(r => !have.has(r.name + ":" + r.file.size));
+  if (!fresh.length) return toast("All of GhostCut's clips are already here.");
+  toast(`Bringing in ${fresh.length} clip${fresh.length > 1 ? "s" : ""} from GhostCut…`, 3000);
+  await addFiles(fresh.map(r => r.file instanceof File ? r.file : new File([r.file], r.name || "ghostcut-clip.mp4", { type: r.file.type || "video/mp4" })));
+}
 
 // --------------------------------------------------------------------------------------------
 // library panels
@@ -139,6 +191,9 @@ function mediaPanel(P) {
   dz.addEventListener("dragover", e => { e.preventDefault(); dz.classList.add("over"); });
   dz.addEventListener("dragleave", () => dz.classList.remove("over"));
   P.append(dz);
+  const gc = h(`<button style="width:100%;margin:-2px 0 10px">👻 Bring in my GhostCut clips</button>`);
+  gc.addEventListener("click", importGhostCut);
+  P.append(gc);
   const g = h(`<div class="grid"></div>`); P.append(g);
   for (const m of media.values()) {
     const it = h(`<div class="item media" title="${esc(m.name)}">
