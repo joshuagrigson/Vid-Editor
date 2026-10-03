@@ -10,7 +10,8 @@ import { lookById, effectById } from "./effects.js";
 export class Player {
   constructor(canvas, app) {
     this.canvas = canvas; this.app = app;
-    this.comp = new Compositor(canvas);
+    // The preview needs WebGL2. Without it the rest of the editor still works; the page explains how to turn it on.
+    try { this.comp = new Compositor(canvas); } catch (e) { this.comp = null; this.glError = e; console.error(e); }
     this.t = 0; this.playing = false;
     this.src = document.createElement("canvas"); this.srcCtx = this.src.getContext("2d", { willReadFrequently: false });
     this.ov = document.createElement("canvas"); this.ovCtx = this.ov.getContext("2d");
@@ -63,6 +64,7 @@ export class Player {
   }
 
   render() {
+    if (!this.comp) return;
     const { w, h } = this.sizeFor();
     this.comp.resize(w, h);
     if (this.ov.width !== w || this.ov.height !== h) { this.ov.width = w; this.ov.height = h; }
@@ -142,7 +144,7 @@ export class Player {
     this.playing = true;
     this._lay = layout(this.project);
     this.wall0 = performance.now(); this.t0 = this.t;
-    this.comp.resetFeedback();
+    this.comp?.resetFeedback();
     this.syncVideo(true);
     this.restartAudio();
     const tick = () => {

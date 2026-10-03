@@ -27,6 +27,13 @@ export const app = {
 window.__frightcut = app;   // handy for debugging and tests
 
 const player = new Player($("#viewer"), app);
+if (!player.comp) {
+  $("#viewerWrap").append(h(`<div id="noGL"><b>The preview can't start: this browser has graphics (WebGL) switched off.</b>
+    <div>You can still add and arrange clips. To see the preview and export, turn graphics acceleration on:</div>
+    <div>Edge: open <code>edge://settings/system</code> → turn on <i>Use graphics acceleration when available</i> → Restart.</div>
+    <div>Chrome: open <code>chrome://settings/system</code> → turn on <i>Use graphics acceleration when available</i> → Relaunch.</div>
+    <div class="note">Details: ${esc(player.glError?.message || "no WebGL2")}</div></div>`));
+}
 app.player = player;
 
 // --------------------------------------------------------------------------------------------
@@ -846,7 +853,7 @@ window.addEventListener("beforeunload", e => { if (exporting) { e.preventDefault
 // --------------------------------------------------------------------------------------------
 // boot
 async function boot() {
-  await loadFonts();
+  await Promise.race([loadFonts(), new Promise(r => setTimeout(r, 3000))]);   // never let a slow font hold up the editor
   try {
     const saved = await DB.get("kv", "project");
     const rows = await DB.all("media");
@@ -864,4 +871,4 @@ async function boot() {
   if (d > 0) $("#zoomFit").click();
   player.seek(0);
 }
-boot();
+boot().catch(e => window.__frightcutFail?.(e.stack || e.message));

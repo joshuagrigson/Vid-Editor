@@ -110,6 +110,21 @@
 <div id="modal" class="modal"><div class="card" id="modalCard"></div></div>
 <div id="toast"></div>
 
-<script type="module" src="js/app.js"></script>
+<script>
+// If anything stops FrightCut starting, say so on screen instead of leaving a dead page.
+(function () {
+  function show(msg) {
+    var b = document.getElementById("bootErr");
+    if (!b) { b = document.createElement("div"); b.id = "bootErr"; document.body.appendChild(b); }
+    b.textContent = "FrightCut hit a problem. Please screenshot this box and send it over:\n\n" + msg +
+      "\n\nBrowser: " + navigator.userAgent;
+  }
+  window.__frightcutFail = show;
+  addEventListener("error", function (e) { if (e.message) show(e.message + (e.filename ? "  (" + e.filename.split("/").pop() + ":" + e.lineno + ")" : "")); });
+  addEventListener("unhandledrejection", function (e) { var r = e.reason; show(String(r && (r.stack || r.message) || r)); });
+  setTimeout(function () { if (!window.__frightcut) show("The editor didn't finish starting after 15 seconds. Try reloading the page."); }, 15000);
+})();
+</script>
+<script type="module" src="js/app.js" onerror="window.__frightcutFail('Could not load the editor code (js/app.js). Check the internet connection and reload.')"></script>
 </body>
 </html>
