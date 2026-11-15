@@ -106,6 +106,17 @@ Controls in the Trailer panel:
   Typewriter, Bold poster, or Theatrical (an engraved Cinzel serif in a silver
   gradient over a faint smoke or light-beam plate).
 
+## Trailer storyboard (browser edition)
+
+Under the clip list, the **Trailer storyboard** lays the trailer out as tiles you
+arrange by hand. *Build it for me* fills it with the automatic trailer; then drag
+tiles to reorder, click one to edit it (which clip, where it starts, how long, jump
+scare, boom, flash, shake, slow motion), and drag in new pieces anywhere: tagline
+cards, a title card, flash words, black beats, static bursts, any of the eleven
+photoreal apparitions as its own shot, or any clip (from the palette or straight
+from the clip list). While the storyboard has pieces, *Create trailer* renders
+exactly that; *Back to the automatic trailer* clears it.
+
 ## Feature Film look (a theatrical trailer finish)
 
 Pick **Feature Film** and the movie and trailer are finished like a studio

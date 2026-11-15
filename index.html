@@ -91,6 +91,26 @@
   .promo img { width: 100%; display: block; border-radius: 8px; margin: 12px 0; border: 1px solid #2a2622; }
   .promo .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
   .promo .on { color: #8fd18f; font-weight: 600; }
+  .board .strip { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0; min-height: 96px; padding: 8px; border: 1px dashed var(--line); border-radius: 10px; }
+  .board .strip.over { border-color: var(--accent); }
+  .board .tile { width: 92px; border: 1px solid var(--line); border-radius: 8px; background: #0e0e11; cursor: grab; overflow: hidden; position: relative; font-size: 11px; }
+  .board .tile.sel { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+  .board .tile.dropL { box-shadow: -3px 0 0 var(--accent); } .board .tile.dropR { box-shadow: 3px 0 0 var(--accent); }
+  .board .tile .pic { height: 56px; background: #000 center/cover no-repeat; display: grid; place-items: center; text-align: center; color: #e9e2d4; font-family: Cinzel, serif; font-size: 9px; letter-spacing: .08em; padding: 2px; line-height: 1.2; overflow: hidden; }
+  .board .tile .pic.ghost { background-size: contain; background-color: #050505; }
+  .board .tile .cap { padding: 3px 5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .board .tile .x { position: absolute; top: 2px; right: 2px; width: 18px; height: 18px; padding: 0; border-radius: 50%; font-size: 11px; line-height: 1; background: rgba(0,0,0,.7); }
+  .board .pal { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 6px; }
+  .board .chip { border: 1px solid var(--line); border-radius: 8px; padding: 5px 9px; font-size: 12px; cursor: grab; background: #131317; user-select: none; }
+  .board .chip.img { padding: 0; width: 44px; height: 44px; background: #050505 center/contain no-repeat; }
+  .board .chip.clipc { background-size: cover; width: 60px; position: relative; }
+  .board .chip.clipc span { position: absolute; left: 2px; bottom: 1px; font-size: 10px; background: rgba(0,0,0,.7); padding: 0 3px; border-radius: 3px; }
+  .board .chip:hover { border-color: var(--accent); }
+  .board .edit { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: end; margin-top: 10px; padding: 10px; border: 1px solid var(--line); border-radius: 10px; }
+  .board .edit label { font-size: 12px; color: var(--muted); display: grid; gap: 3px; }
+  .board .edit label.ck { display: flex; align-items: center; gap: 5px; }
+  .board .edit input[type=number] { width: 80px; } .board .edit input[type=text] { width: 260px; }
+  .board h3 { font-size: 12px; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); margin: 12px 0 4px; font-weight: 600; }
   .promo video { width: 100%; margin-top: 12px; border-radius: 8px; background: #000; }
   code { font-family: var(--mono); font-size: 12px; background: #0f0f14; padding: 1px 5px; border-radius: 4px; }
   #clips { display: grid; gap: 10px; margin-top: 14px; }
@@ -269,6 +289,24 @@
         keep this tab open while it renders, and expect roughly a minute of rendering per 20 seconds of iPhone footage.</div>
       <div id="clips"></div>
     </div>
+    <div class="panel board" id="board" style="margin-top:14px">
+      <h2>Trailer storyboard</h2>
+      <div class="hint" style="margin-top:0">Arrange the trailer by hand. Every piece is a tile: drag tiles to reorder them, click one to edit it, and drag in
+        anything from the pieces below, or any clip, to drop it exactly where you want it.</div>
+      <div class="pal" style="margin-top:10px">
+        <button class="primary" id="sbBuild" disabled>Build it for me, then I'll edit</button>
+        <button id="sbClear" hidden>Back to the automatic trailer</button>
+        <span class="hint" id="sbInfo" style="margin:0"></span>
+      </div>
+      <div class="strip" id="sbStrip"></div>
+      <div class="edit" id="sbEdit" hidden></div>
+      <h3>Pieces: drag in, or click to add at the end</h3>
+      <div class="pal" id="sbPieces"></div>
+      <h3>Apparitions</h3>
+      <div class="pal" id="sbGhosts"></div>
+      <h3>Your clips</h3>
+      <div class="pal" id="sbClips"></div>
+    </div>
   </section>
 </main>
 
@@ -301,7 +339,7 @@
 </div></div>
 
 <script type="module">
-import { Engine, Renderer, STYLES, TRANSITIONS, BEDS, defaultProject, planNights, chooseCanvas, clipSpan, planTrailer } from "./app.js";
+import { Engine, Renderer, STYLES, TRANSITIONS, BEDS, defaultProject, planNights, chooseCanvas, clipSpan, planTrailer, APPARITION_NAMES } from "./app.js";
 
 const $ = (s, r = document) => r.querySelector(s);
 const fmt = s => { s = Math.round(s); return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0"); };
@@ -538,6 +576,7 @@ $("#listen").addEventListener("click", () => {
 
 // ---------- clips ----------
 function renderClips() {
+  queueMicrotask(() => renderBoard());
   const box = $("#clips"); box.innerHTML = "";
   const ready = clips.filter(c => !c.pending);
   const plan = ready.length ? planNights(state, ready) : [];
@@ -691,7 +730,7 @@ async function startRender({ resumeMap = null, record = null, mode = "movie" } =
     const rec = record || { active: true, mode, settings: JSON.parse(JSON.stringify(state)), clipIds: ready.map(c => c.id), threads: engine.threads, stalls: 0, startedAt: Date.now() };
     mode = rec.mode || "movie";
     if (!record) { await DB.clear("seg"); await DB.set("kv", "render", rec); }
-    if (mode === "trailer" && !rec.trailer) {
+    if (mode === "trailer" && !rec.trailer && !(sbItems().length && !record)) {
       // listen to each clip once; the plan is stored so a resume renders exactly the same trailer
       const plans = planNights(state, ready);
       const analyses = {};
@@ -700,6 +739,12 @@ async function startRender({ resumeMap = null, record = null, mode = "movie" } =
         analyses[i] = ready[i].meta.has_audio ? await engine._analyze(ready[i].file, plans[i].start, plans[i].duration) : [];
       }
       rec.trailer = planTrailer(state, ready, analyses, +state.trailer_length || 60);
+      await DB.set("kv", "render", rec);
+    }
+    if (mode === "trailer" && !record && sbItems().length) {
+      // a hand-arranged storyboard replaces the automatic plan
+      rec.trailer = materializeBoard(ready);
+      if (!rec.trailer.items.length) throw new Error("The storyboard is empty. Add some pieces, or go back to the automatic trailer.");
       await DB.set("kv", "render", rec);
     }
     const r = new Renderer(engine, state, ready, progress, {
@@ -730,6 +775,146 @@ async function startRender({ resumeMap = null, record = null, mode = "movie" } =
 }
 $("#render").addEventListener("click", () => startRender({ mode: "movie" }));
 $("#trailer").addEventListener("click", () => startRender({ mode: "trailer" }));
+// ---------- trailer storyboard: every piece of the trailer as a tile you can move ----------
+const sbItems = () => state.storyboard?.items || [];
+let sbSel = -1, sbDrag = null;   // sbDrag: {from: index} (moving a tile) or {piece: {...}} (a new piece)
+const sbSave = () => { save(); renderBoard(); };
+const sbOpts = () => ({ booms: state.trailer_booms !== false, bw: !!state.trailer_bw });
+const PIECES = [
+  { label: "Tagline card", make: () => ({ type: "card", title: "SOMETHING IS IN THE HOUSE", dur: 2.4, fadeOut: 0.4 }) },
+  { label: "Title card", make: () => ({ type: "card", big: true, useTitle: true, dur: 3.4, fadeOut: 0.5 }) },
+  { label: "Flash word", make: () => ({ type: "word", text: "RUN", dur: 0.2 }) },
+  { label: "Black beat", make: () => ({ type: "black", dur: 0.8, quiet: true }) },
+  { label: "Static burst", make: () => ({ type: "static", dur: 0.18 }) },
+];
+const clipMoment = c => { const [a, b] = clipSpan(c); return { type: "moment", clipId: c.id, start: 0, dur: Math.min(2.5, Math.max(0.5, b - a)), transition: "cut", boom: false, flash: false }; };
+function sbInsert(piece, at = sbItems().length) {
+  if (!state.storyboard) state.storyboard = { items: [] };
+  state.storyboard.items.splice(at, 0, piece); sbSel = at; sbSave();
+}
+function sbTileHtml(it) {
+  const c = it.type === "moment" ? clips.find(x => x.id === it.clipId) : null;
+  if (it.type === "moment") return `<div class="pic" style="background-image:url('${c?.thumb || ""}')">${c ? "" : "clip removed"}</div><div class="cap">${esc(c?.name || "?")} @${(+it.start).toFixed(1)}s · ${(+it.dur).toFixed(1)}s${it.scare ? " 😱" : ""}</div>`;
+  if (it.type === "ghost") return `<div class="pic ghost" style="background-image:url('studio/assets/apparitions/${it.ghost}.png')"></div><div class="cap">${esc(APPARITION_NAMES[it.ghost] || "Apparition")} · ${(+it.dur).toFixed(1)}s</div>`;
+  if (it.type === "card") return `<div class="pic">${esc(it.useTitle ? (state.title || "TITLE") : it.title || "")}</div><div class="cap">${it.big ? "Title" : "Tagline"} · ${(+it.dur).toFixed(1)}s</div>`;
+  if (it.type === "word") return `<div class="pic" style="font-family:Impact,sans-serif;font-size:16px">${esc(it.text || "")}</div><div class="cap">Flash word · ${(+it.dur).toFixed(2)}s</div>`;
+  if (it.type === "static") return `<div class="pic" style="background:repeating-conic-gradient(#777 0 25%,#222 0 50%) 0 0/6px 6px"></div><div class="cap">Static · ${(+it.dur).toFixed(2)}s</div>`;
+  return `<div class="pic" style="color:#555">BLACK</div><div class="cap">Black · ${(+it.dur).toFixed(1)}s</div>`;
+}
+function sbDropAt(e, at) {
+  e.preventDefault(); e.stopPropagation();
+  const d = sbDrag; sbDrag = null;
+  if (d?.from != null) {
+    const arr = state.storyboard.items, [m] = arr.splice(d.from, 1);
+    if (at > d.from) at--; arr.splice(at, 0, m); sbSel = at; sbSave(); return;
+  }
+  if (d?.piece) return sbInsert(d.piece, at);
+  const c = clips.find(x => !x.pending && x.id === e.dataTransfer.getData("text/plain"));   // a clip card dragged from the footage list
+  if (c) sbInsert(clipMoment(c), at);
+}
+function renderBoard() {
+  const strip = $("#sbStrip"); if (!strip) return;
+  const items = sbItems(), ready = clips.filter(c => !c.pending);
+  $("#sbBuild").disabled = busy || !ready.length || !engine.ff;
+  $("#sbBuild").textContent = items.length ? "Rebuild from scratch" : "Build it for me, then I'll edit";
+  $("#sbClear").hidden = !items.length;
+  const total = items.reduce((a, it) => a + (+it.dur || 0), 0);
+  $("#sbInfo").textContent = items.length ? `${items.length} pieces · ${total.toFixed(1)} s · Create trailer will use this storyboard` : "Empty: Create trailer makes the automatic trailer.";
+  $("#trailer").textContent = items.length ? "Create trailer (storyboard)" : "Create trailer";
+  strip.innerHTML = items.length ? "" : '<div class="hint" style="margin:auto">Drop pieces or clips here.</div>';
+  items.forEach((it, i) => {
+    const t = document.createElement("div"); t.className = "tile" + (i === sbSel ? " sel" : ""); t.draggable = true;
+    t.innerHTML = sbTileHtml(it) + '<button class="x" title="Remove">×</button>';
+    t.querySelector(".x").addEventListener("click", e => { e.stopPropagation(); items.splice(i, 1); sbSel = -1; sbSave(); });
+    t.addEventListener("click", () => { sbSel = sbSel === i ? -1 : i; renderBoard(); });
+    t.addEventListener("dragstart", e => { sbDrag = { from: i }; e.dataTransfer.setData("text/x-sb", "1"); e.dataTransfer.effectAllowed = "move"; });
+    t.addEventListener("dragover", e => { e.preventDefault(); const r = t.getBoundingClientRect(), right = e.clientX > r.left + r.width / 2; t.classList.toggle("dropR", right); t.classList.toggle("dropL", !right); });
+    t.addEventListener("dragleave", () => t.classList.remove("dropL", "dropR"));
+    t.addEventListener("drop", e => { const r = t.getBoundingClientRect(); sbDropAt(e, i + (e.clientX > r.left + r.width / 2 ? 1 : 0)); });
+    strip.appendChild(t);
+  });
+  // palettes
+  const chip = (box, html, cls, piece) => {
+    const c = document.createElement("div"); c.className = "chip " + cls; c.draggable = true; c.innerHTML = html;
+    c.addEventListener("dragstart", e => { sbDrag = { piece: piece() }; e.dataTransfer.setData("text/x-sb", "1"); e.dataTransfer.effectAllowed = "copy"; });
+    c.addEventListener("click", () => sbInsert(piece()));
+    box.appendChild(c); return c;
+  };
+  const pb = $("#sbPieces"); pb.innerHTML = ""; for (const p of PIECES) chip(pb, p.label, "", p.make);
+  const gb = $("#sbGhosts"); gb.innerHTML = "";
+  for (const [id, name] of Object.entries(APPARITION_NAMES)) { const c = chip(gb, "", "img", () => ({ type: "ghost", ghost: id, dur: 1.2, boom: true })); c.style.backgroundImage = `url('studio/assets/apparitions/${id}.png')`; c.title = name; }
+  const cb = $("#sbClips"); cb.innerHTML = ready.length ? "" : '<span class="hint" style="margin:0">Add clips above and they show up here.</span>';
+  ready.forEach((c, i) => { const el = chip(cb, `<span>${i + 1}</span>`, "img clipc", () => clipMoment(c)); el.style.backgroundImage = `url('${c.thumb || ""}')`; el.title = c.name; });
+  renderBoardEdit();
+}
+function renderBoardEdit() {
+  const box = $("#sbEdit"), it = sbItems()[sbSel];
+  box.hidden = !it; if (!it) return;
+  const num = (k, label, step, min) => `<label>${label}<input type="number" data-sb="${k}" step="${step}" min="${min}" value="${it[k] ?? 0}"></label>`;
+  const ck = (k, label, on = !!it[k]) => `<label class="ck"><input type="checkbox" data-sb="${k}" ${on ? "checked" : ""}> ${label}</label>`;
+  let h = "";
+  if (it.type === "moment") {
+    const ready = clips.filter(c => !c.pending);
+    h = `<label>Clip<select data-sb="clipId">${ready.map((c, i) => `<option value="${c.id}" ${c.id === it.clipId ? "selected" : ""}>${i + 1}. ${esc(c.name)}</option>`).join("")}</select></label>` +
+      num("start", "Starts at (s)", 0.1, 0) + num("dur", "Length (s)", 0.1, 0.3) +
+      ck("scare", "Jump scare") + ck("boom", "Boom on the cut") + ck("flash", "White flash") + ck("shake", "Shake") + ck("slowmo", "Slow motion") + ck("riser", "Rising shriek") + ck("fadeBlack", "Fade through black", it.transition === "black");
+  } else if (it.type === "card") {
+    h = (it.useTitle ? `<span class="hint" style="margin:0">Uses the movie title: <b>${esc(state.title || "")}</b></span>` : `<label>Text<input type="text" data-sb="title" value="${esc(it.title || "")}"></label>`) +
+      `<label>Small line under it<input type="text" data-sb="subtitle" value="${esc(it.subtitle || "")}"></label>` + num("dur", "Length (s)", 0.1, 0.5) + ck("big", "Big (title size)");
+  } else if (it.type === "word") h = `<label>Word<input type="text" data-sb="text" value="${esc(it.text || "")}"></label>` + num("dur", "Length (s)", 0.05, 0.1);
+  else if (it.type === "ghost") h = `<label>Apparition<select data-sb="ghost">${Object.entries(APPARITION_NAMES).map(([k, v]) => `<option value="${k}" ${k === it.ghost ? "selected" : ""}>${v}</option>`).join("")}</select></label>` + num("dur", "Length (s)", 0.1, 0.4) + ck("boom", "Stinger sound");
+  else h = num("dur", "Length (s)", 0.05, 0.1) + (it.type === "black" ? ck("quiet", "Silence (duck the music)") : "");
+  box.innerHTML = h;
+  box.querySelectorAll("[data-sb]").forEach(el => el.addEventListener("change", () => {
+    const k = el.dataset.sb;
+    if (k === "fadeBlack") it.transition = el.checked ? "black" : "cut";
+    else if (k === "scare") it.scare = el.checked ? Math.max(0.4, (+it.dur || 2) * 0.55) : 0;
+    else if (k === "slowmo") it.slowmo = el.checked ? 1.6 : 0;
+    else if (el.type === "checkbox") it[k] = el.checked;
+    else if (el.type === "number") it[k] = Math.max(+el.min || 0, parseFloat(el.value) || 0);
+    else it[k] = el.value;
+    if (k === "dur" && it.scare) it.scare = Math.max(0.4, it.dur * 0.55);
+    sbSave();
+  }));
+}
+// the storyboard as a plan the renderer understands: clips by position, lengths kept inside each clip
+function materializeBoard(ready) {
+  const plans = planNights(state, ready), items = [];
+  for (const src of sbItems()) {
+    const it = { ...src };
+    if (it.type === "moment") {
+      const ci = ready.findIndex(c => c.id === it.clipId); if (ci < 0) continue;
+      const len = plans[ci].duration;
+      it.clip = ci; it.dur = Math.max(0.3, Math.min(+it.dur || 2, len)); it.start = Math.max(0, Math.min(+it.start || 0, len - it.dur));
+      if (it.scare) it.scare = Math.min(it.dur - 0.4, Math.max(0.3, it.scare));
+      if (it.scare && it.dur < 1.2) it.scare = 0;
+    } else if (it.type === "card") { if (it.useTitle) { it.title = state.title || "UNTITLED"; it.subtitle = it.subtitle || state.trailer_dateline || ""; } }
+    it.dur = Math.max(0.1, +it.dur || 1);
+    items.push(it);
+  }
+  return { length: 0, opts: sbOpts(), items, total: items.reduce((a, it) => a + it.dur, 0), storyboard: true };
+}
+$("#sbStrip").addEventListener("dragover", e => { e.preventDefault(); $("#sbStrip").classList.add("over"); });
+$("#sbStrip").addEventListener("dragleave", () => $("#sbStrip").classList.remove("over"));
+$("#sbStrip").addEventListener("drop", e => { $("#sbStrip").classList.remove("over"); sbDropAt(e, sbItems().length); });
+$("#sbClear").addEventListener("click", () => { if (!confirm("Throw away this storyboard and go back to the automatic trailer?")) return; state.storyboard = null; sbSel = -1; sbSave(); });
+$("#sbBuild").addEventListener("click", () => {
+  if (sbItems().length && !confirm("Replace the storyboard with a fresh automatic one?")) return;
+  runJob(async progress => {
+    const ready = clips.filter(x => !x.pending), plans = planNights(state, ready), analyses = {};
+    for (let i = 0; i < ready.length; i++) {
+      progress(0.9 * i / ready.length, `Listening to clip ${i + 1} of ${ready.length} for the loud parts…`);
+      analyses[i] = ready[i].meta.has_audio ? await engine._analyze(ready[i].file, plans[i].start, plans[i].duration) : [];
+    }
+    const tp = planTrailer(state, ready, analyses, +state.trailer_length || 60);
+    state.storyboard = { items: tp.items.map(it => it.type === "moment" ? { ...it, clipId: ready[it.clip].id }
+      : it.type === "card" && it.big ? { ...it, useTitle: true } : { ...it }) };
+    sbSel = -1; save();
+  });
+});
+document.addEventListener("dragend", () => { sbDrag = null; document.querySelectorAll(".board .dropL, .board .dropR").forEach(t => t.classList.remove("dropL", "dropR")); });
+window.__sb = { insert: sbInsert, items: sbItems, clipMoment: id => clipMoment(clips.find(c => c.id === id)), clips: () => clips.map(c => c.id) };
+
 $("#useFeature").addEventListener("click", () => {
   const radio = document.querySelector('.look[data-v="feature"] input');
   if (radio) { radio.checked = true; radio.dispatchEvent(new Event("change")); }

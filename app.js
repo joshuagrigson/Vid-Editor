@@ -45,6 +45,7 @@ export function defaultProject() {
     trailer_booms: true, trailer_static: true, trailer_flash: true, trailer_shake: true,
     trailer_slowmo: true, trailer_posttitle: true, trailer_bw: false,
     trailer_words: "", trailer_dateline: "",
+    storyboard: null,               // {items:[...]} = a hand-arranged trailer; null = automatic
   };
 }
 
@@ -301,6 +302,10 @@ export class Engine {
   }
 }
 
+export const APPARITION_NAMES = { real_face: "Screaming Ghost", real_girl: "The Girl", real_widow: "The Widow", real_shroud: "The Shrouded Man",
+  real_crawler: "The Crawler", real_hand: "Reaching Hand", real_eyes: "Eyes in the Dark", real_mist: "Ectoplasm",
+  real_hatman: "The Hat Man", real_child: "Shadow Child", real_claw: "Shadow Claw" };
+const SHADOW_APPARITIONS = new Set(["real_hatman", "real_child", "real_claw"]);
 // Photoreal apparitions (rendered on MARK-1, shipped with FrightCut in studio/assets/apparitions).
 const apparitionCache = new Map();
 export async function apparitionPng(id) {
@@ -789,6 +794,33 @@ export class Renderer {
     this.finish(w); await this.push(name, duration);
   }
 
+  // A storyboard piece: one photoreal apparition coming out of the dark with a slow push-in and a stinger.
+  async renderGhost(name, id, duration, sting = true) {
+    const W = this.W, H = this.H, eng = this.eng;
+    const png = await apparitionPng(id);
+    if (!png) return this.renderBlack(name, duration);
+    await eng.ff.writeFile("ghost.png", png);
+    const feature = !!STYLES[this.p.style]?.feature;
+    const fh = Math.round((feature ? scopeH(W, H) : Math.min(H, W * 1.5)) * 0.86 / 2) * 2;
+    // shadow figures are black, so they stand against a dim wall instead of pure black
+    const bg = SHADOW_APPARITIONS.has(id) ? "0x4a4640" : "black";
+    const graph = `[1:v]scale=-2:${fh}:flags=lanczos,format=rgba[g];[0:v][g]overlay=(W-w)/2:(H-h)/2:format=auto,` +
+      `scale=w='trunc(iw*(1+0.12*t/${f3(duration)})/2)*2':h='trunc(ih*(1+0.12*t/${f3(duration)})/2)*2':eval=frame,crop=${W}:${H},` +
+      `eq=brightness='0.02*sin(t*37)':eval=frame,vignette=angle=PI/4,noise=alls=12:allf=t,` +
+      `fade=t=in:st=0:d=0.1,fade=t=out:st=${f3(Math.max(0, duration - 0.15))}:d=0.15,format=yuv420p,trim=duration=${f3(duration)},setpts=PTS-STARTPTS[vout];` +
+      (sting ? jumpScareAudioSource(0.02, "[st]") + `;[st]atrim=duration=${f3(duration)},apad=whole_dur=${f3(duration)}[aout]`
+             : `[2:a]atrim=duration=${f3(duration)}[aout]`);
+    await eng.ff.writeFile("ghost.txt", graph + "\n");
+    const w = duration * 0.3;
+    await eng.exec(["-f", "lavfi", "-i", `color=c=${bg}:s=${W}x${H}:r=${FPS}:d=${f3(duration)}`,
+      "-loop", "1", "-framerate", String(FPS), "-t", f3(duration), "-threads", "1", "-i", "ghost.png",
+      "-f", "lavfi", "-threads", "1", "-i", `anullsrc=r=${AR}:cl=stereo`,
+      "-filter_complex_script", "ghost.txt", "-map", "[vout]", "-map", "[aout]", "-t", f3(duration), ...ENC, name + ".mp4"],
+      duration, this.job(w, "Apparition"), "apparition");
+    for (const f of ["ghost.png", "ghost.txt"]) try { await eng.ff.deleteFile(f); } catch (_) {}
+    this.finish(w); await this.push(name, duration);
+  }
+
   async renderTypewriter(name, text) {
     this.progress(this.doneWork / this.totalWork, "Drawing the opening text…");
     const frames = await makeTypewriterFrames(this.W, this.H, text);
@@ -1092,6 +1124,7 @@ export class Renderer {
     for (const it of tp.items) {
       if (it.type === "moment") w += it.dur * (this.clips[it.clip].meta.hdr ? 3 : 1);
       else if (it.type === "card") w += it.dur * 0.25;
+      else if (it.type === "ghost") w += it.dur * 0.3;
     }
     return w + w * 0.08;
   }
@@ -1109,6 +1142,7 @@ export class Renderer {
       if (it.type === "black") { await S(nm, 0, () => this.renderBlack(nm, it.dur)); if (it.quiet) quiet.push({ at, dur: it.dur }); }
       // TV static is a camcorder device; a theatrical cut goes to black instead
       else if (it.type === "static") await S(nm, 0, () => STYLES[p.style]?.feature ? this.renderBlack(nm, it.dur) : this.renderStatic(nm, it.dur));
+      else if (it.type === "ghost") await S(nm, it.dur * 0.3, () => this.renderGhost(nm, it.ghost, it.dur, it.boom !== false));
       else if (it.type === "word") {
         await S(nm, 0, async () => this.renderCard(nm, await makeCard(this.W, this.H, { title: it.text, titleKind: "bold", titleScale: 0.11 }), it.dur, 0, 0, `Word: ${it.text}`, { plain: true }));
       } else if (it.type === "card") {
