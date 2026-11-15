@@ -20,7 +20,7 @@ export const SCARES = [
     build: t => ({
       fx: [...fx(["jump-scare", "punch", "scare"], t, 1.0), ...fx(["whiteout", "flash"], t, 0.12)],
       sounds: [...snd(["jumpscare"], t), ...snd(["scream_f"], t + 0.05, 0.7), ...snd(["tinnitus"], t + 0.9, 0.5)],
-      overlays: [...spook(["demon_face", "skull"], t, 0.45, { scale: 0.95, move: "flash" })],
+      overlays: [...spook(["real_face", "demon_face", "skull"], t, 0.45, { scale: 0.95, move: "flash" })],
     }),
   },
   {
@@ -28,7 +28,7 @@ export const SCARES = [
     build: t => ({
       fx: [...fx(["dark-presence", "vignette"], t, 2.4)],
       sounds: [...snd(["whisper"], t + 0.3, 0.8), ...snd(["drone_swell"], t, 0.7)],
-      overlays: [...spook(["shadow_figure"], t, 2.2, { x: 0.78, y: 0.55, scale: 0.7, opacity: 0.75, move: "fade-flicker" })],
+      overlays: [...spook(["real_hatman", "shadow_figure"], t, 2.2, { x: 0.78, y: 0.55, scale: 0.8, opacity: 0.7, move: "fade-flicker" })],
     }),
   },
   {
@@ -58,7 +58,7 @@ export const SCARES = [
     build: t => ({
       fx: [...fx(["spirit-trails", "trails", "ghost-echo", "echo"], t, 3)],
       sounds: [...snd(["ghost-moan", "moan"], t, 0.8)],
-      overlays: [...spook(["ghost_girl", "sheet_ghost"], t, 3, { y: 0.55, scale: 0.7, opacity: 0.55, move: "drift-left" })],
+      overlays: [...spook(["real_widow", "ghost_girl", "sheet_ghost"], t, 3, { y: 0.55, scale: 0.8, opacity: 0.5, move: "drift-left" })],
     }),
   },
   {
@@ -73,7 +73,7 @@ export const SCARES = [
     build: t => ({
       fx: [...fx(["lightning"], t, 0.8)],
       sounds: [...snd(["thunder"], t + 0.35)],
-      overlays: [...spook(["shadow_figure"], t + 0.05, 0.12, { x: 0.3, scale: 0.6, opacity: 0.9, move: "none" })],
+      overlays: [...spook(["real_hatman", "shadow_figure"], t + 0.05, 0.12, { x: 0.3, scale: 0.75, opacity: 0.9, move: "none" })],
     }),
   },
   {
@@ -97,7 +97,7 @@ export const SCARES = [
     build: t => ({
       fx: [...fx(["mirror"], t, 2), ...fx(["freeze-stutter", "time-slip"], t + 0.6, 0.6)],
       sounds: [...snd(["string_stab"], t + 0.6)],
-      overlays: [...spook(["ghost_girl", "shadow_figure"], t + 0.6, 0.6, { x: 0.65, scale: 0.6, opacity: 0.8, move: "none" })],
+      overlays: [...spook(["real_girl", "ghost_girl", "shadow_figure"], t + 0.6, 0.6, { x: 0.65, scale: 0.75, opacity: 0.85, move: "none" })],
     }),
   },
   {
@@ -121,6 +121,22 @@ export const SCARES = [
       fx: [...fx(["no-signal"], t, 0.8), ...fx(["blackout"], t + 0.8, 3)],
       sounds: [...snd(["vhs_eject"], t), ...snd(["tv_static"], t + 0.6, 0.6)],
       overlays: [...text("FOOTAGE ENDS", "typewriter", t + 1.2, 2.6)],
+    }),
+  },
+  {
+    id: "crawler", icon: "🫣", name: "It's coming", desc: "The lights stutter and something pale crawls out of the dark toward the camera.",
+    build: t => ({
+      fx: [...fx(["flicker-lights", "flicker"], t, 2.6), ...fx(["vignette", "dark-presence"], t, 2.8)],
+      sounds: [...snd(["growl"], t + 0.3, 0.7), ...snd(["drone_swell"], t, 0.6), ...snd(["string_stab"], t + 2.4)],
+      overlays: [...spook(["real_crawler", "spider"], t + 0.2, 2.4, { x: 0.5, y: 0.72, scale: 0.75, opacity: 0.92, move: "creep" })],
+    }),
+  },
+  {
+    id: "reach", icon: "🖐️", name: "Hand at the lens", desc: "A grey hand reaches out of the dark at the camera, then everything cuts to black.",
+    build: t => ({
+      fx: [...fx(["vignette", "dark-presence"], t, 1.6), ...fx(["blackout"], t + 1.5, 0.8)],
+      sounds: [...snd(["whisper"], t, 0.7), ...snd(["jumpscare"], t + 1.45, 0.8)],
+      overlays: [...spook(["real_hand"], t, 1.5, { x: 0.5, y: 0.55, scale: 0.9, opacity: 0.95, move: "creep" })],
     }),
   },
 ];

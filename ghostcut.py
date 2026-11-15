@@ -99,6 +99,12 @@ def _font_candidates(kind: str) -> list[str]:
     mac = "/System/Library/Fonts"
     macs = "/System/Library/Fonts/Supplemental"
     lin = "/usr/share/fonts/truetype"
+    if kind == "cinema":
+        fonts = os.path.join(HERE, "studio", "assets", "fonts")
+        return [os.path.join(fonts, "cinzel-latin-600-normal.woff")] + _font_candidates("serif")
+    if kind == "cinema_sub":
+        fonts = os.path.join(HERE, "studio", "assets", "fonts")
+        return [os.path.join(fonts, "cinzel-latin-500-normal.woff")] + _font_candidates("serif")
     if kind == "mono":
         return [
             os.path.join(win, "consola.ttf"), os.path.join(win, "lucon.ttf"), os.path.join(win, "cour.ttf"),
@@ -184,11 +190,24 @@ def wrap_text(text: str, font, max_width: float, spacing: float = 0) -> list[str
 
 def make_card(path: str, W: int, H: int, title: str = "", subtitle: str = "", body: str = "",
               title_kind: str = "serif", title_scale: float = 0.075, body_kind: str = "mono",
-              cursor: bool = False, dim: float = 1.0) -> None:
-    """A black card with optional big title, small subtitle and/or body paragraph."""
-    from PIL import Image, ImageDraw
+              cursor: bool = False, dim: float = 1.0, plate: str | None = None) -> None:
+    """A black card with optional big title, small subtitle and/or body paragraph.
+    title_kind "cinema" = engraved theatrical serif in a metal gradient; plate = "smoke" | "dust" background."""
+    from PIL import Image, ImageDraw, ImageFilter
 
     img = Image.new("RGB", (W, H), (0, 0, 0))
+    cinema = title_kind == "cinema"
+    if plate:
+        pp = os.path.join(HERE, "studio", "assets", "plates", plate + ".jpg")
+        if os.path.exists(pp):
+            pl = Image.open(pp).convert("RGB")
+            k = max(W / pl.width, H / pl.height)
+            pl = pl.resize((int(pl.width * k + 0.5), int(pl.height * k + 0.5)))
+            pl = pl.crop(((pl.width - W) // 2, (pl.height - H) // 2, (pl.width - W) // 2 + W, (pl.height - H) // 2 + H))
+            img = Image.blend(img, pl, 0.34)
+            # darken toward the edges so the plate never competes with the type
+            vg = Image.radial_gradient("L").resize((W, H))
+            img = Image.composite(Image.new("RGB", (W, H), 0), img, vg.point(lambda v: int(64 + v * 0.6)))
     d = ImageDraw.Draw(img)
     S = H / 1080.0
     white = tuple(int(v * dim) for v in (235, 235, 235))
@@ -196,12 +215,16 @@ def make_card(path: str, W: int, H: int, title: str = "", subtitle: str = "", bo
     blocks = []  # (font, text, spacing, fill, gap_after, is_body)
     if title:
         f = load_font(title_kind, int(H * title_scale))
-        sp = f.size * (0.08 if title_kind == "bold" else 0.18)
+        sp = f.size * (0.08 if title_kind == "bold" else 0.24 if cinema else 0.18)
         for ln in wrap_text(title.upper(), f, W * 0.86, sp):
-            blocks.append((f, ln, sp, white, int(30 * S), False))
+            blocks.append((f, ln, sp, "metal" if cinema else white, int(30 * S), False))
     if subtitle:
-        f = load_font("mono", int(34 * S))
-        blocks.append((f, subtitle, f.size * 0.08, grey, int(10 * S), False))
+        if cinema:
+            f = load_font("cinema_sub", int(30 * S))
+            blocks.append((f, subtitle.upper(), f.size * 0.35, grey, int(10 * S), False))
+        else:
+            f = load_font("mono", int(34 * S))
+            blocks.append((f, subtitle, f.size * 0.08, grey, int(10 * S), False))
     if body:
         f = load_font(body_kind, int(40 * S))
         for ln in wrap_text(body, f, W * 0.72):
@@ -212,7 +235,23 @@ def make_card(path: str, W: int, H: int, title: str = "", subtitle: str = "", bo
     for f, text, sp, fill, gap, is_body in blocks:
         w = text_width(f, text, sp)
         x = (W - w) / 2
-        draw_spaced(d, x, y, text, f, fill, sp)
+        if fill == "metal":
+            # engraved metal: draw the line as a mask, fill it with a silver gradient, add a faint warm glow
+            mask = Image.new("L", (W, H), 0)
+            draw_spaced(ImageDraw.Draw(mask), x, y, text, f, 255, sp)
+            glow = mask.filter(ImageFilter.GaussianBlur(f.size * 0.18)).point(lambda v: int(v * 0.3))
+            img.paste(Image.new("RGB", (W, H), (255, 226, 190)), (0, 0), glow)
+            grad = Image.new("RGB", (W, H))
+            gd = ImageDraw.Draw(grad)
+            top, bot = int(y), int(y + f.size * 1.25)
+            for yy in range(top, bot + 1):
+                k = (yy - top) / max(1, bot - top)
+                c = (251, 247, 239) if k < 0.45 else (169, 162, 150) if k < 0.6 else (207, 200, 187)
+                gd.line([(0, yy), (W, yy)], fill=c)
+            img.paste(grad, (0, 0), mask)
+            d = ImageDraw.Draw(img)
+        else:
+            draw_spaced(d, x, y, text, f, fill, sp)
         if is_body:
             last_body_end = (x + w, y, f.size)
         y += f.size * 1.25 + gap
@@ -428,9 +467,106 @@ STYLES = {
             "blurb": "Warm, smeary tape with colour bleed, jitter, and a PLAY overlay."},
     "cinematic": {"name": "Cinematic Dark", "clock": False, "scanlines": False,
                   "blurb": "Moody teal-shadow grade, widescreen bars, light grain. No camcorder text."},
+    "feature": {"name": "Feature Film", "clock": False, "scanlines": False, "feature": True,
+                "blurb": "A theatrical-release finish: 2.39:1 scope frame, film grade with highlight roll-off, halation, real grain and 24 fps cadence."},
     "clean": {"name": "Clean", "clock": False, "scanlines": False,
               "blurb": "No look applied. Just the splice, titles, transitions and sound."},
 }
+
+FILM_GRADES = {
+    "horror": "Horror (cold, sickly)",
+    "blockbuster": "Blockbuster (teal & orange)",
+    "bleach": "Bleach bypass (silver)",
+}
+GRADE_PARAMS = {
+    "horror": dict(c=1.42, lift=0.018, white=0.955, sat=0.62, skin=0.75, sh=(-0.018, 0.010, 0.022), hi=(-0.006, 0.004, 0.012), mono=0.0),
+    "blockbuster": dict(c=1.30, lift=0.014, white=0.965, sat=0.96, skin=1.0, sh=(-0.032, 0.002, 0.042), hi=(0.040, 0.012, -0.030), mono=0.0),
+    "bleach": dict(c=1.62, lift=0.010, white=0.960, sat=0.55, skin=0.6, sh=(-0.004, 0.0, 0.010), hi=(0.004, 0.004, 0.006), mono=0.35),
+}
+SCOPE = 2.39
+FRAME_Y = {"top": 0.1, "middle": 0.5, "bottom": 0.88}
+
+
+def make_grade_cube(path: str, kind: str = "horror", N: int = 33) -> str:
+    """Film-print style grade as a 3D LUT (same maths as the browser edition's makeGradeCube)."""
+    g = GRADE_PARAMS.get(kind, GRADE_PARAMS["horror"])
+    clamp = lambda x: min(1.0, max(0.0, x))
+
+    def S(x):
+        x = clamp(x)
+        y = 0.5 * (2 * x) ** g["c"] if x < 0.5 else 1 - 0.5 * (2 * (1 - x)) ** g["c"]
+        return g["lift"] + (g["white"] - g["lift"]) * y
+
+    lines = [f'TITLE "GhostCut {kind}"', f"LUT_3D_SIZE {N}", "DOMAIN_MIN 0 0 0", "DOMAIN_MAX 1 1 1"]
+    for bi in range(N):
+        for gi in range(N):
+            for ri in range(N):
+                r, gg, b = ri / (N - 1), gi / (N - 1), bi / (N - 1)
+                l = 0.2126 * r + 0.7152 * gg + 0.0722 * b
+                l2 = S(l)
+                k = l2 / l if l > 1e-4 else 0
+                r, gg, b = 0.5 * clamp(r * k) + 0.5 * S(r), 0.5 * clamp(gg * k) + 0.5 * S(gg), 0.5 * clamp(b * k) + 0.5 * S(b)
+                mx, mn = max(r, gg, b), min(r, gg, b)
+                dd = mx - mn
+                hue = 0.0
+                if dd > 1e-5:
+                    if mx == r:
+                        hue = ((gg - b) / dd) % 6
+                    elif mx == gg:
+                        hue = (b - r) / dd + 2
+                    else:
+                        hue = (r - gg) / dd + 4
+                    hue *= 60
+                    if hue < 0:
+                        hue += 360
+                skin_w = max(0.0, 1 - abs(hue - 28) / 24) if dd > 0.02 else 0.0
+                sat = g["sat"] + (max(g["sat"], g["skin"]) - g["sat"]) * skin_w
+                L = 0.2126 * r + 0.7152 * gg + 0.0722 * b
+                r, gg, b = L + (r - L) * sat, L + (gg - L) * sat, L + (b - L) * sat
+                if g["mono"]:
+                    r, gg, b = r + (L - r) * g["mono"], gg + (L - gg) * g["mono"], b + (L - b) * g["mono"]
+                ws, wh = (1 - L) ** 2, L ** 2
+                r += g["sh"][0] * ws + g["hi"][0] * wh
+                gg += g["sh"][1] * ws + g["hi"][1] * wh
+                b += g["sh"][2] * ws + g["hi"][2] * wh
+                lines.append(f"{clamp(r):.5f} {clamp(gg):.5f} {clamp(b):.5f}")
+    with open(path, "w", encoding="ascii") as f:
+        f.write("\n".join(lines) + "\n")
+    return path
+
+
+def ff_path(p: str) -> str:
+    """A file path written inside a filter graph: forward slashes, escaped drive colon, quoted."""
+    return "'" + p.replace("\\", "/").replace(":", "\\:") + "'"
+
+
+def scope_h(W: int, H: int) -> int:
+    return min(H, int(round(W / SCOPE / 2)) * 2)
+
+
+def scope_bars(W: int, H: int) -> str:
+    bar = int(round((H - scope_h(W, H)) / 2))
+    if bar <= 0:
+        return "null"
+    return f"drawbox=x=0:y=0:w=iw:h={bar}:c=black:t=fill,drawbox=x=0:y=ih-{bar}:w=iw:h={bar}:c=black:t=fill"
+
+
+def feature_fit(W: int, H: int, frame: str = "auto", portrait: bool = False) -> str:
+    h = scope_h(W, H)
+    y = int(round((H - h) / 2))
+    fy = FRAME_Y.get(frame, 0.2 if portrait else 0.42)
+    return (f"scale={W}:{h}:force_original_aspect_ratio=increase:flags=lanczos,crop={W}:{h}:(iw-{W})/2:(ih-{h})*{fy},"
+            f"pad={W}:{H}:0:{y}:black,setsar=1[base]")
+
+
+def feature_chain(W: int, H: int, cube: str) -> str:
+    gw, gh = max(16, int(round(W / 8 / 2)) * 2), max(16, int(round(H / 8 / 2)) * 2)
+    blur = f"gblur=sigma={max(2, round(W / 640))}"
+    return (f"fps=24,fps={FPS},format=gbrp,split[fm][fh];"
+            f"[fh]scale={gw}:{gh}:flags=bilinear,format=rgb24,lutrgb=r='clip((val-150)*2.6,0,255)':g='clip((val-168)*1.5,0,255)*0.42'"
+            f":b='clip((val-185)*1.2,0,255)*0.18',format=gbrp,{blur},scale={W}:{H}:flags=bilinear[fhl];"
+            f"[fm][fhl]blend=all_mode=screen:all_opacity=0.55,lut3d=file={ff_path(cube)}:interp=trilinear,format=yuv420p,"
+            "vignette=angle=PI/5.5,noise=c0s=11:c0f=t+u")
 
 TRANSITIONS = {
     "static": "TV static burst",
@@ -439,7 +575,9 @@ TRANSITIONS = {
 }
 
 
-def style_video_chain(style: str, W: int, H: int) -> str:
+def style_video_chain(style: str, W: int, H: int, cube: str | None = None) -> str:
+    if STYLES.get(style, {}).get("feature"):
+        return feature_chain(W, H, cube) if cube else "eq=contrast=1.16:saturation=0.7:gamma=0.95,vignette=angle=PI/5.5,noise=c0s=11:c0f=t+u"
     if style == "night":
         return (
             "hue=s=0,eq=brightness=0.10:contrast=1.22:gamma=1.55,"
@@ -471,6 +609,8 @@ def style_video_chain(style: str, W: int, H: int) -> str:
 
 
 def style_audio_chain(style: str) -> str:
+    if STYLES.get(style, {}).get("feature"):
+        return "highpass=f=30,acompressor=threshold=-24dB:ratio=3:attack=10:release=200:makeup=4dB"
     if style in ("night", "seccam"):
         return "highpass=f=60,lowpass=f=9000,acompressor=threshold=-20dB:ratio=3:attack=20:release=250:makeup=5dB"
     if style == "vhs":
@@ -548,7 +688,9 @@ def default_project() -> dict:
         "trailer_length": 60,
         "trailer_taglines": "",
         "bed": "drone",                # drone | heartbeat | wind | musicbox | hum | none | custom
-        "card_font": "serif",          # serif | mono | bold
+        "card_font": "serif",          # serif | mono | bold | cinema
+        "film_grade": "horror",        # Feature Film look: horror | blockbuster | bleach
+        "scare_face": "real_face",     # photoreal apparition on jump scares: real_face | real_eyes | none
         "trailer_pace": "classic",     # slow | classic | relentless
         "trailer_pick": "auto",        # auto | markers
         "trailer_booms": True, "trailer_static": True, "trailer_flash": True, "trailer_shake": True,
@@ -584,6 +726,8 @@ def choose_canvas(proj: dict) -> tuple[int, int]:
         return 1080, 1920
     if mode == "landscape":
         return 1920, 1080
+    if STYLES.get(proj.get("style"), {}).get("feature"):
+        return 1920, 1080   # a scope frame only exists on a landscape screen
     portrait = sum(1 for c in proj["clips"] if c["meta"].get("portrait"))
     return (1080, 1920) if portrait > len(proj["clips"]) / 2 else (1920, 1080)
 
@@ -629,6 +773,10 @@ ENC_FINAL = ["-c:v", "copy", "-c:a", "aac", "-b:a", "192k", "-ar", str(AUDIO_RAT
              "-movflags", "+faststart"]
 
 # A sub-bass hit with a little click, 1.4 s. Used on trailer cuts and cards.
+# The trailer "braam": detuned low saws that swell in and decay. Feature Film cards use it.
+BRAAM = ("aevalsrc=exprs='(0.30*(2*mod(55*t,1)-1)+0.26*(2*mod(55.35*t,1)-1)+0.20*(2*mod(110.6*t,1)-1)+0.16*(2*mod(82.4*t,1)-1)"
+         "+0.55*sin(2*PI*41*t))*min(1,t*18)*exp(-0.9*t)':s=48000:d=2.8,lowpass=f=700,lowpass=f=1400,"
+         "acompressor=threshold=-16dB:ratio=4:attack=5:release=300:makeup=6dB,volume=0.9,aformat=channel_layouts=stereo")
 BOOM = ("aevalsrc=exprs='0.9*sin(2*PI*48*t)*exp(-3.5*t)+0.4*sin(2*PI*95*t)*exp(-6*t)"
         f"+0.25*(random(0)-0.5)*exp(-14*t)':s={AUDIO_RATE}:d=1.4,aformat=channel_layouts=stereo")
 
@@ -889,8 +1037,13 @@ class Renderer:
         plain: no fades at all (a flash word)."""
         out = self._seg(name)
         W, H = self.W, self.H
+        feature = STYLES.get(self.proj.get("style"), {}).get("feature")
         if plain:
             vf = "noise=alls=10:allf=t,format=yuv420p"
+        elif feature:
+            push, fin = (0.06, 0.3) if slam else (0.035, fade_in)
+            vf = (f"scale=w='trunc(iw*(1+{push}*t/{duration:.3f})/2)*2':h='trunc(ih*(1+{push}*t/{duration:.3f})/2)*2':eval=frame,crop={W}:{H},"
+                  f"fade=t=in:st=0:d={fin},fade=t=out:st={duration - fade_out:.3f}:d={fade_out},format=yuv420p,noise=c0s=9:c0f=t+u")
         else:
             if slam:
                 vf = (f"scale=w='trunc(iw*(1+0.05*t/{duration:.3f})/2)*2':h='trunc(ih*(1+0.05*t/{duration:.3f})/2)*2':eval=frame,"
@@ -899,7 +1052,7 @@ class Renderer:
                 vf = f"fade=t=in:st=0:d={fade_in},"
             vf += (f"fade=t=out:st={duration - fade_out:.3f}:d={fade_out},"
                    f"noise=alls=7:allf=t,eq=brightness='0.012*sin(t*31)':eval=frame,format=yuv420p")
-        audio = f"{BOOM},apad" if boom else f"anullsrc=r={AUDIO_RATE}:cl=stereo"
+        audio = f"{BRAAM if feature else BOOM},apad" if boom else f"anullsrc=r={AUDIO_RATE}:cl=stereo"
         args = ["-loop", "1", "-framerate", str(FPS), "-i", png,
                 "-f", "lavfi", "-i", audio,
                 "-t", f"{duration:.3f}", "-vf", vf] + ENC_INTER + [out]
@@ -985,11 +1138,14 @@ class Renderer:
             pre += f"setpts={slowmo:.3f}*PTS,fps={FPS},"
         if meta.get("hdr"):
             pre += hdr_to_sdr_chain(meta["hdr"]) + ","
-        graph.append(pre + fit_chain(meta.get("width", 0), meta.get("height", 0), W, H))
+        feature = bool(STYLES.get(style, {}).get("feature"))
+        graph.append(pre + (feature_fit(W, H, clip.get("frame") or "auto", bool(meta.get("portrait"))) if feature
+                            else fit_chain(meta.get("width", 0), meta.get("height", 0), W, H)))
         cur = "[base]"
+        cube = self._grade_cube() if feature else None
 
         # look (+ trailer extras)
-        fx = style_video_chain(style, W, H)
+        fx = style_video_chain(style, W, H, cube)
         if bw:
             fx += ",hue=s=0"
         if negate:
@@ -1012,6 +1168,16 @@ class Renderer:
             if scare_T is not None and not (0.3 <= scare_T <= D - 0.4):
                 scare_T = None if D < 1.5 else max(0.3, min(D - 0.4, scare_T))
         if scare_T is not None:
+            # a photoreal apparition lunges in on the hit (and takes the zoom, shake and strobe with the footage)
+            face = proj.get("scare_face", "real_face")
+            face_png = os.path.join(HERE, "studio", "assets", "apparitions", f"{face}.png") if face and face != "none" else ""
+            if face_png and os.path.exists(face_png):
+                fh = int(round((scope_h(W, H) if feature else min(W, H)) * (0.98 if face == "real_face" else 0.7) / 2)) * 2
+                inputs += ["-loop", "1", "-framerate", str(FPS), "-t", "0.5", "-i", face_png]
+                graph.append(f"[{n_in}:v]scale=-2:{fh},format=rgba,setpts=PTS-STARTPTS+{scare_T + 0.02:.3f}/TB[gf]")
+                graph.append(f"{cur}[gf]overlay=(W-w)/2:(H-h)/2:eof_action=pass:repeatlast=0:format=auto[gfo]")
+                cur = "[gfo]"
+                n_in += 1
             graph.append(f"{cur}{jump_scare_video(scare_T, W, H)}[sc]")
             cur = "[sc]"
         if flash:
@@ -1038,6 +1204,10 @@ class Renderer:
             graph.append(f"{cur}[{n_in}:v]overlay=0:0:format=auto[ts]")
             cur = "[ts]"
             n_in += 1
+
+        if feature:
+            graph.append(f"{cur}{scope_bars(W, H)}[bars]")
+            cur = "[bars]"
 
         # fades + exact length
         fade = (0.35 if piece else 0.5) if transition == "black" else 0.0
@@ -1139,6 +1309,11 @@ class Renderer:
         run_ffmpeg(args, total, self._job(weight, "Final assembly"), os.path.join(self.build, "final.log"))
         self._finish(weight)
 
+    def _grade_cube(self) -> str:
+        kind = self.proj.get("film_grade") or "horror"
+        os.makedirs(self.build, exist_ok=True)
+        return make_grade_cube(os.path.join(self.build, f"grade_{kind}.cube"), kind)
+
     def preview_look(self, style: str, out_path: str, clip: dict | None = None, W: int = 480, H: int = 270) -> str:
         """One small frame with a look applied, for the look picker. clip=None → the synthetic hallway."""
         os.makedirs(self.build, exist_ok=True)
@@ -1152,8 +1327,11 @@ class Renderer:
                 make_sample_frame(sample, W, H)
             inputs = ["-i", sample]
         graph = [f"[0:v]scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},setsar=1,format=yuv420p[base]",
-                 f"[base]{style_video_chain(style, W, H)}[fx]"]
+                 f"[base]{style_video_chain(style, W, H, self._grade_cube() if STYLES.get(style, {}).get('feature') else None)}[fx]"]
         cur, n_in = "[fx]", 1
+        if STYLES.get(style, {}).get("feature"):
+            graph.append(f"{cur}{scope_bars(W, H)}[bars]")
+            cur = "[bars]"
         if STYLES.get(style, {}).get("scanlines"):
             scan = os.path.join(self.build, f"scan_{W}x{H}_p2.png")
             if not os.path.exists(scan):
@@ -1229,7 +1407,11 @@ class Renderer:
                 if it.get("quiet"):
                     quiet.append((at, it["dur"]))
             elif it["type"] == "static":
-                self.render_static(nm, it["dur"])
+                # TV static is a camcorder device; a theatrical cut goes to black instead
+                if STYLES.get(proj.get("style"), {}).get("feature"):
+                    self.render_black(nm, it["dur"])
+                else:
+                    self.render_static(nm, it["dur"])
             elif it["type"] == "word":
                 png = os.path.join(self.build, nm + ".png")
                 make_card(png, self.W, self.H, title=it["text"], title_kind="bold", title_scale=0.11)
@@ -1238,7 +1420,8 @@ class Renderer:
                 png = os.path.join(self.build, nm + ".png")
                 big = it.get("big")
                 make_card(png, self.W, self.H, title=it.get("title", ""), subtitle=it.get("subtitle", ""), title_kind=font,
-                          title_scale=(0.085 if len(it.get("title", "")) < 22 else 0.06) if big else 0.05)
+                          title_scale=(0.085 if len(it.get("title", "")) < 22 else 0.06) if big else 0.05,
+                          plate=("dust" if big else "smoke") if font == "cinema" else None)
                 self.render_card(nm, png, it["dur"], 0.8, it.get("fade_out", 0.4), slam=True, boom=o.get("booms", True))
             elif it["type"] == "moment":
                 if it.get("riser"):
@@ -1277,7 +1460,8 @@ class Renderer:
             self.render_typewriter("intro", intro_text_for(proj))
             card = os.path.join(self.build, "title.png")
             make_card(card, self.W, self.H, title=proj["title"] or "UNTITLED", subtitle=proj.get("subtitle", ""),
-                      title_kind=proj.get("card_font") or "serif", title_scale=0.085 if len(proj["title"]) < 22 else 0.06)
+                      title_kind=proj.get("card_font") or "serif", title_scale=0.085 if len(proj["title"]) < 22 else 0.06,
+                      plate="dust" if proj.get("card_font") == "cinema" else None)
             self.render_card("title", card, 4.0, fade_in=1.6, fade_out=0.3)
             self.render_black("black_after_title", 0.8)
 
@@ -1579,7 +1763,8 @@ def make_handler(ws: Workspace, job: RenderJob):
                     q = parse_qs(u.query)
                     clip = next((c for c in ws.proj["clips"] if c["id"] == q.get("clip", [""])[0]), None)
                     ts = "1" if ws.proj.get("timestamps", True) else "0"
-                    out = os.path.join(ws.previews_dir, f"look_{style}_{clip['id'] if clip else 'sample'}_{ts}.jpg")
+                    grade = (ws.proj.get("film_grade") or "horror") if STYLES[style].get("feature") else ""
+                    out = os.path.join(ws.previews_dir, f"look_{style}{grade}_{clip['id'] if clip else 'sample'}_{ts}.jpg")
                     if not os.path.exists(out):
                         try:
                             Renderer(json.loads(json.dumps(ws.proj)), ws.root).preview_look(style, out, clip)
@@ -1661,7 +1846,7 @@ def make_handler(ws: Workspace, job: RenderJob):
                 if p == "/api/clip/update":
                     clip = self._clip(data.get("id", ""))
                     with ws.lock:
-                        for k in ("start", "end", "effect", "scare_at", "new_night", "name", "in_trailer"):
+                        for k in ("start", "end", "effect", "scare_at", "new_night", "name", "in_trailer", "frame"):
                             if k in data:
                                 clip[k] = data[k]
                         ws.save()

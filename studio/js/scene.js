@@ -26,6 +26,10 @@ export function sceneAt(project, t, lay = layout(project), extraFx = null) {
   const active = project.fx.filter(f => t >= f.start && t < f.start + f.dur).sort((a, b) => a.start - b.start);
   for (const f of active) post.push({ type: f.type, params: f.params, local: t - f.start, dur: f.dur, seed: f.seed ?? 0.5 });
   for (const x of extraFx || []) post.push({ dur: 0, ...x });
+  // scope bars are a matte, not a look: they go on last, over spooks, text and timed effects alike
+  const isBars = f => f.type === "cinema-bars";
+  const bars = pre.filter(isBars);
+  if (bars.length) { pre.splice(0, pre.length, ...pre.filter(f => !isBars(f))); post.push(...bars); }
   const transition = transitionAt(project, t, lay);
   return { l, srcTime, pre, post, transition, xf };
 }

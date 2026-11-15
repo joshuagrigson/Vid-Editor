@@ -53,9 +53,13 @@ const time12 = d => { let h = d.getHours(); const ap = h >= 12 ? "PM" : "AM"; h 
 const MON = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"];
 
 // ---------------------------------------------------------------------------------------------
-export function drawOverlays(ctx, W, H, project, t, extra = []) {
+// layer: "under" = spooks only (composited into the footage before the look, so they are graded, grained and
+// matted like everything else that was "filmed"); "over" = text and camera HUDs (on top of the look); "all" = both.
+export function overlayLayer(o) { return o.kind === "sticker" ? "under" : "over"; }
+export function drawOverlays(ctx, W, H, project, t, extra = [], layer = "all") {
   ctx.clearRect(0, 0, W, H);
-  const items = project.overlays.filter(o => t >= o.start && t < o.start + o.dur).concat(extra);
+  const items = project.overlays.filter(o => t >= o.start && t < o.start + o.dur).concat(extra)
+    .filter(o => layer === "all" || overlayLayer(o) === layer);
   for (const o of items) {
     const lt = t - o.start;
     ctx.save();

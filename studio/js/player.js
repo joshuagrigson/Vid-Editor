@@ -3,7 +3,7 @@
 import { layout, duration, outputSize, FPS } from "./project.js";
 import { sceneAt } from "./scene.js";
 import { Compositor } from "./compositor.js";
-import { drawOverlays } from "./overlays.js";
+import { drawOverlays, overlayLayer } from "./overlays.js";
 import { renderSfx, renderBed } from "./sfx.js";
 import { lookById, effectById } from "./effects.js";
 
@@ -15,6 +15,7 @@ export class Player {
     this.t = 0; this.playing = false;
     this.src = document.createElement("canvas"); this.srcCtx = this.src.getContext("2d", { willReadFrequently: false });
     this.ov = document.createElement("canvas"); this.ovCtx = this.ov.getContext("2d");
+    this.un = document.createElement("canvas"); this.unCtx = this.un.getContext("2d");
     this.activeEl = null; this.activeClipId = null;
     this.hoverFx = null;
     this.master = 0.9;
@@ -67,15 +68,18 @@ export class Player {
     if (!this.comp) return;
     const { w, h } = this.sizeFor();
     this.comp.resize(w, h);
-    if (this.ov.width !== w || this.ov.height !== h) { this.ov.width = w; this.ov.height = h; }
+    if (this.ov.width !== w || this.ov.height !== h) { this.ov.width = w; this.ov.height = h; this.un.width = w; this.un.height = h; }
     const lay = this._lay || layout(this.project);
     const ht = this.hoverFx || this.hoverOverlay ? (performance.now() - this.hoverStart) / 1000 : 0;
     const sc = sceneAt(this.project, this.t, lay, this.hoverFx ? this.hoverFx.map(f => ({ ...f, local: ht })) : null);
     const s = this.drawSource(sc);
-    const ovItems = this.project.overlays.some(o => this.t >= o.start && this.t < o.start + o.dur) || this.hoverOverlay;
-    if (ovItems) drawOverlays(this.ovCtx, w, h, this.project, this.t, this.hoverOverlay ? [{ ...this.hoverOverlay, start: this.t - (0.3 + ht % 3.2), dur: 3.6 }] : []);
+    const hov = this.hoverOverlay ? [{ ...this.hoverOverlay, start: this.t - (0.3 + ht % 3.2), dur: 3.6 }] : [];
+    const live = this.project.overlays.filter(o => this.t >= o.start && this.t < o.start + o.dur).concat(hov);
+    const unOn = live.some(o => overlayLayer(o) === "under"), ovOn = live.some(o => overlayLayer(o) === "over");
+    if (unOn) drawOverlays(this.unCtx, w, h, this.project, this.t, hov, "under");
+    if (ovOn) drawOverlays(this.ovCtx, w, h, this.project, this.t, hov, "over");
     const frame = { src: s?.src, srcW: s?.w, srcH: s?.h, fit: this.project.fit, xf: sc.xf, t: this.t + ht,
-      pre: sc.pre, overlay: ovItems ? this.ov : null, post: sc.post, transition: sc.transition };
+      under: unOn ? this.un : null, pre: sc.pre, overlay: ovOn ? this.ov : null, post: sc.post, transition: sc.transition };
     // Effects that hold frames read the previous output; when paused/scrubbing that would be some other moment,
     // so prime the feedback buffer with this frame first.
     if (!this.playing && !ht && [...sc.pre, ...sc.post].some(f => effectById(f.type)?.feedback)) this.comp.render(frame);

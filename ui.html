@@ -156,6 +156,17 @@
         <option value="serif">Classic serif</option>
         <option value="mono">Typewriter</option>
         <option value="bold">Bold poster</option>
+        <option value="cinema">Theatrical (engraved serif)</option>
+      </select></label>
+      <label class="f" id="gradeRow">Film grade <select data-k="film_grade">
+        <option value="horror">Horror: cold and sickly</option>
+        <option value="blockbuster">Blockbuster: teal and orange</option>
+        <option value="bleach">Bleach bypass: hard silver</option>
+      </select></label>
+      <label class="f">Jump-scare apparition <select data-k="scare_face">
+        <option value="real_face">Screaming ghost (photoreal)</option>
+        <option value="real_eyes">Eyes in the dark (photoreal)</option>
+        <option value="none">None, just the hit</option>
       </select></label>
       <label class="check"><input type="checkbox" data-k="title_card"> Opening text + title card</label>
       <label class="check"><input type="checkbox" data-k="night_cards"> “NIGHT #1” cards</label>
@@ -292,6 +303,7 @@
         state[k] = v;
         if (k === 'drone') $('#droneVal').textContent = Math.round(v * 100) + '%';
         if (k === 'nights_mode' || k === 'style') renderClips();
+        if (k === 'film_grade') setTimeout(refreshLookPreviews, 600);
         if (k.startsWith('trailer_') && el.type === 'checkbox') demoToggle(k, el.checked);
         if (k === 'trailer_pace' || k === 'trailer_bw') updateMock();
         clearTimeout(saveTimer);
@@ -308,6 +320,7 @@
       else if (document.activeElement !== el) el.value = state[k] ?? '';
     });
     $('#droneVal').textContent = Math.round((state.drone || 0) * 100) + '%';
+    $('#gradeRow').style.display = (state.styles?.[state.style] || {}).feature ? '' : 'none';
     document.querySelectorAll('.look:not(.bed)').forEach(l => l.classList.toggle('on', l.dataset.v === state.style));
     document.querySelectorAll('.look.bed').forEach(l => l.classList.toggle('on', l.dataset.v === (state.bed || 'drone')));
     showSound();
@@ -318,8 +331,10 @@
       const l = document.createElement('label'); l.className = 'look'; l.dataset.v = k;
       l.innerHTML = `<input type="radio" name="style" value="${k}"><div class="txt"><b>${s.name}</b><small>${s.blurb}</small></div><img class="lookimg" alt="">`;
       l.querySelector('input').addEventListener('change', async () => {
+        const body = { style: k };
+        if (s.feature && (state.card_font || 'serif') === 'serif') body.card_font = state.card_font = 'cinema';   // theatrical type to match
         state.style = k; fillSettings(); renderClips(); updateMock();
-        try { state = await api('/api/settings', { style: k }); renderClips(); } catch (e) { showErr(e); }
+        try { state = await api('/api/settings', body); fillSettings(); renderClips(); } catch (e) { showErr(e); }
       });
       box.appendChild(l);
     }
@@ -343,12 +358,12 @@
   let lookKeyShown = '';
   function refreshLookPreviews() {
     const first = (state.clips || [])[0];
-    const key = `${first ? first.id : 'sample'}|${state.timestamps !== false ? 1 : 0}`;
+    const key = `${first ? first.id : 'sample'}|${state.timestamps !== false ? 1 : 0}|${state.film_grade || 'horror'}`;
     if (key === lookKeyShown) return;
     lookKeyShown = key;
     document.querySelectorAll('.look:not(.bed)').forEach(l => {
       const img = l.querySelector('img.lookimg');
-      if (img) img.src = `/api/look/${l.dataset.v}.jpg?clip=${first ? first.id : ''}&ts=${state.timestamps !== false ? 1 : 0}`;
+      if (img) img.src = `/api/look/${l.dataset.v}.jpg?clip=${first ? first.id : ''}&ts=${state.timestamps !== false ? 1 : 0}&g=${state.film_grade || 'horror'}`;
     });
     updateMock();
   }
@@ -477,6 +492,7 @@
               <input type="number" min="0.3" step="0.1" data-ck="scare_at" value="${c.scare_at ?? ''}" placeholder="${Math.max(0.5, (p.duration || dur) / 2).toFixed(1)}"></div></div>
             ${state.nights_mode === 'manual' ? `<div><label>Night</label><label class="check" style="margin:4px 0"><input type="checkbox" data-ck="new_night" ${c.new_night || i === 0 ? 'checked' : ''} ${i === 0 ? 'disabled' : ''}> starts a new night</label></div>` : ''}
             <div><label>Trailer</label><label class="check" style="margin:4px 0"><input type="checkbox" data-ck="in_trailer" ${c.in_trailer === false ? '' : 'checked'}> in trailer</label></div>
+            ${(state.styles[c.effect === 'style' || !c.effect ? state.style : c.effect] || {}).feature ? `<div><label>Scope framing</label><select data-ck="frame"><option value="auto">Auto${c.meta.portrait ? ' (upper part)' : ''}</option><option value="top">Top</option><option value="middle">Middle</option><option value="bottom">Bottom</option></select></div>` : ''}
           </div>
         </div>
         <div class="side">
@@ -486,6 +502,7 @@
           <button data-act="del" class="del">Remove</button>
         </div>`;
       d.querySelector('[data-ck=effect]').value = c.effect || 'style';
+      { const fr = d.querySelector('[data-ck=frame]'); if (fr) fr.value = c.frame || 'auto'; }
       d.querySelectorAll('[data-ck]').forEach(el => el.addEventListener('change', () => updateClip(c, d)));
       d.querySelectorAll('[data-act]').forEach(b => b.addEventListener('click', e => { e.stopPropagation(); clipAction(b.dataset.act, c, i); }));
       // drag reorder
@@ -514,6 +531,7 @@
       scare_at: on ? at : null };
     const nn = d.querySelector('[data-ck=new_night]'); if (nn) body.new_night = nn.checked;
     body.in_trailer = d.querySelector('[data-ck=in_trailer]').checked;
+    const fr = d.querySelector('[data-ck=frame]'); if (fr) body.frame = fr.value;
     try { state = await api('/api/clip/update', body); renderClips(); } catch (e) { showErr(e); }
   }
   async function clipAction(act, c, i) {

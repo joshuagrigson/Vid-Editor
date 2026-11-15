@@ -1,6 +1,7 @@
 // FrightCut — procedurally drawn, animated horror overlays (Canvas 2D only).
-// Every sticker is vector-drawn with paths, gradients and shadow blur; no images.
-// Halloween-scary, never gory.
+// Every sticker is vector-drawn with paths, gradients and shadow blur, except the photoreal
+// "Real apparitions" (apparitions.js), which are cut-out photographs. Halloween-scary, never gory.
+import { APPARITIONS, APPARITION_IDS, apparitionImage, loadApparitions } from './apparitions.js';
 
 const TAU = Math.PI * 2;
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
@@ -95,6 +96,7 @@ function eyeBlink(t, period = 3.7, offset = 0) {
 /* ------------------------------------------------------------------ registry */
 
 export const STICKER_CATEGORIES = [
+  { id: 'real', name: 'Real apparitions', icon: '📷' },
   { id: 'figures', name: 'Ghosts & Figures', icon: '👻' },
   { id: 'critters', name: 'Creepy Critters', icon: '🕷️' },
   { id: 'marks', name: 'Marks & Messages', icon: '🖐️' },
@@ -105,6 +107,23 @@ const DEFS = [];
 /** fit: 'contain' (keeps aspect, draws in units where height = 1) | 'stretch' (fills box, pixel units) */
 function st(id, name, cat, aspect, anim, desc, draw, extra = {}) {
   DEFS.push({ id, name, cat, aspect, anim, desc, draw, fit: extra.fit || 'contain', clip: !!extra.clip || extra.fit === 'stretch', defaults: { opacity: 1, ...(extra.defaults || {}) } });
+}
+
+/* ================================================================== REAL APPARITIONS */
+
+for (const A of APPARITIONS) {
+  st(A.id, A.name, 'real', A.aspect, !A.still, A.desc, (ctx, W, H, t, r) => {
+    const img = apparitionImage(A.id);
+    if (!img) return;
+    if (!A.still) {
+      // barely alive: a slow breath and a sway pivoting on the feet, never in step with another copy
+      const ph = r() * TAU;
+      const breathe = 1 + Math.sin(t * 1.3 + ph) * 0.008;
+      ctx.translate(W / 2, H); ctx.rotate(Math.sin(t * 0.6 + ph) * 0.01); ctx.scale(1, breathe); ctx.translate(-W / 2, -H);
+    }
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(img, 0, 0, W, H);
+  });
 }
 
 /* ================================================================== FIGURES */
@@ -1042,8 +1061,14 @@ export function drawSticker(ctx, id, x, y, w, h, t, opts = {}) {
 export function stickerThumb(id, size = 96) {
   const c = document.createElement('canvas'); c.width = size; c.height = size;
   const g = c.getContext('2d');
-  g.fillStyle = '#16161b'; g.fillRect(0, 0, size, size);
+  // shadow figures are black, so their cards get a pale wall to stand against
+  g.fillStyle = APPARITIONS.find((a) => a.id === id)?.light ? '#8d877e' : '#16161b'; g.fillRect(0, 0, size, size);
   const d = MAP.get(id);
+  if (d && APPARITION_IDS.has(id) && !apparitionImage(id)) {
+    // photo not decoded yet: draw the card again once it is
+    loadApparitions([id]).then(() => { const n = stickerThumb(id, size); g.drawImage(n, 0, 0); });
+    return c;
+  }
   if (d) {
     const pad = size * 0.06, a = d.fit === 'contain' ? d.aspect : Math.min(2, d.aspect);
     let w = size - pad * 2, h = w / a; if (h > size - pad * 2) { h = size - pad * 2; w = h * a; }

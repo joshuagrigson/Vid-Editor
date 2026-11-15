@@ -6,6 +6,7 @@ import { Player } from "./player.js";
 import { EFFECTS, CATEGORIES, TRANSITIONS, LOOKS, effectById, transitionById, lookById, defaultParams } from "./effects.js";
 import { SFX, SFX_CATEGORIES, BEDS, renderSfx, renderBed } from "./sfx.js";
 import { STICKERS, STICKER_CATEGORIES, stickerThumb } from "./stickers.js";
+import { loadApparitions } from "./apparitions.js";
 import { TEXT_STYLES, HUDS, MOVES, loadFonts } from "./overlays.js";
 import { SCARES } from "./scares.js";
 import { exportMovie, pickCodecs, pickSaveFile } from "./export.js";
@@ -867,6 +868,7 @@ async function boot() {
     if (saved && saved.version === 1) app.project = Object.assign(newProject(), saved);
   } catch (e) { console.warn("restore failed", e); }
   renderLibrary(); changed({ keepFrame: true });
+  loadApparitions().then(() => { if (!player.playing) player.render(); });   // photo spooks, in the background
   const d = duration(app.project);
   if (d > 0) $("#zoomFit").click();
   player.seek(0);

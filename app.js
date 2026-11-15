@@ -19,6 +19,8 @@ export const STYLES = {
     blurb: "Warm, smeary tape with colour bleed, jitter, and a PLAY overlay." },
   cinematic: { name: "Cinematic Dark", clock: false, scanlines: false,
     blurb: "Moody teal-shadow grade, widescreen bars, light grain. No camcorder text." },
+  feature: { name: "Feature Film", clock: false, scanlines: false, feature: true,
+    blurb: "A theatrical-release finish: 2.39:1 scope frame, film grade with highlight roll-off, halation, real grain and 24 fps cadence." },
   clean: { name: "Clean", clock: false, scanlines: false,
     blurb: "No look applied. Just the splice, titles, transitions and sound." },
 };
@@ -34,7 +36,9 @@ export function defaultProject() {
     trailer_length: "60", trailer_taglines: "",
     // sound bed (movie and trailer): drone | heartbeat | wind | musicbox | hum | none | custom
     bed: "drone",
-    card_font: "serif",             // serif | mono | bold
+    card_font: "serif",             // serif | mono | bold | cinema
+    film_grade: "horror",           // Feature Film look: horror | blockbuster | bleach
+    scare_face: "real_face",        // photoreal apparition flashed in on jump scares: real_face | real_eyes | none
     // trailer
     trailer_pace: "classic",        // slow | classic | relentless
     trailer_pick: "auto",           // auto | markers
@@ -297,6 +301,18 @@ export class Engine {
   }
 }
 
+// Photoreal apparitions (rendered on MARK-1, shipped with FrightCut in studio/assets/apparitions).
+const apparitionCache = new Map();
+export async function apparitionPng(id) {
+  if (!/^real_[a-z]+$/.test(id || "")) return null;
+  if (!apparitionCache.has(id)) {
+    apparitionCache.set(id, fetch(new URL(`studio/assets/apparitions/${id}.png`, document.baseURI))
+      .then(r => r.ok ? r.arrayBuffer() : null).then(b => b && new Uint8Array(b)).catch(() => null));
+  }
+  const b = await apparitionCache.get(id);
+  return b ? b.slice() : null;   // ffmpeg.wasm may transfer the buffer; hand it a copy
+}
+
 export function safeName(name) {
   return name.replace(/[^A-Za-z0-9._-]+/g, "_").slice(-80) || "clip.mov";
 }
@@ -311,8 +327,25 @@ const FONT = {
   serif: '"Times New Roman", Times, Georgia, "DejaVu Serif", serif',
   sans: 'Arial, Helvetica, "Segoe UI", sans-serif',
   bold: 'Impact, "Arial Black", "Helvetica Neue", Arial, sans-serif',
+  cinema: 'Cinzel, "Trajan Pro", "Trajan Pro 3", "Times New Roman", Times, serif',
 };
-const fontCss = (kind, size) => `${kind === "bold" ? "bold " : ""}${size}px ${FONT[kind] || FONT.serif}`;
+const fontCss = (kind, size) => `${kind === "bold" ? "bold " : kind === "cinema" ? "600 " : ""}${size}px ${FONT[kind] || FONT.serif}`;
+
+// Make sure the engraved theatrical face is loaded before a card is drawn with it (falls back to serif).
+let cinemaFontReady = null;
+function loadCinemaFont() {
+  if (!cinemaFontReady) cinemaFontReady = Promise.race([document.fonts?.load?.('600 100px Cinzel') || Promise.resolve(), new Promise(r => setTimeout(r, 4000))]).catch(() => {});
+  return cinemaFontReady;
+}
+// Background plates for theatrical cards (smoke and a dust-filled light beam, rendered on MARK-1).
+const plateCache = new Map();
+function loadPlate(name) {
+  if (!plateCache.has(name)) {
+    plateCache.set(name, fetch(new URL(`studio/assets/plates/${name}.jpg`, document.baseURI))
+      .then(r => r.ok ? r.blob() : null).then(b => b && createImageBitmap(b)).catch(() => null));
+  }
+  return plateCache.get(name);
+}
 
 function canvasToPng(c) {
   return new Promise((res, rej) => c.toBlob(b => b ? b.arrayBuffer().then(ab => res(new Uint8Array(ab))) : rej(new Error("PNG encode failed")), "image/png"));
@@ -345,22 +378,33 @@ function wrapText(ctx, text, maxW, spacing = 0) {
   return lines;
 }
 
-export async function makeCard(W, H, { title = "", subtitle = "", body = "", titleKind = "serif", titleScale = 0.075, cursor = false } = {}) {
+export async function makeCard(W, H, { title = "", subtitle = "", body = "", titleKind = "serif", titleScale = 0.075, cursor = false, plate = null } = {}) {
   const c = document.createElement("canvas"); c.width = W; c.height = H;
   const ctx = c.getContext("2d");
   ctx.fillStyle = "#000"; ctx.fillRect(0, 0, W, H);
+  const cinema = titleKind === "cinema";
+  if (cinema) await loadCinemaFont();
+  const bg = plate ? await loadPlate(plate) : null;
+  if (bg) {
+    // the plate sits low in the frame, dark, never competing with the type
+    const k = Math.max(W / bg.width, H / bg.height), w = bg.width * k, h = bg.height * k;
+    ctx.globalAlpha = 0.34; ctx.drawImage(bg, (W - w) / 2, (H - h) / 2, w, h); ctx.globalAlpha = 1;
+    const vg = ctx.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.15, W / 2, H / 2, Math.max(W, H) * 0.62);
+    vg.addColorStop(0, "rgba(0,0,0,0.25)"); vg.addColorStop(1, "rgba(0,0,0,0.85)");
+    ctx.fillStyle = vg; ctx.fillRect(0, 0, W, H);
+  }
   ctx.textBaseline = "top";
   const S = H / 1080;
   const white = "rgb(235,235,235)", grey = "rgb(160,160,160)";
   const blocks = []; // {font, size, text, spacing, fill, gap, body}
   if (title) {
     const size = Math.round(H * titleScale); ctx.font = fontCss(titleKind, size);
-    const sp = size * (titleKind === "bold" ? 0.08 : 0.18);
-    for (const ln of wrapText(ctx, title.toUpperCase(), W * 0.86, sp)) blocks.push({ font: ctx.font, size, text: ln, spacing: sp, fill: white, gap: 30 * S, body: false });
+    const sp = size * (titleKind === "bold" ? 0.08 : cinema ? 0.24 : 0.18);
+    for (const ln of wrapText(ctx, title.toUpperCase(), W * 0.86, sp)) blocks.push({ font: ctx.font, size, text: ln, spacing: sp, fill: white, gap: 30 * S, body: false, metal: cinema });
   }
   if (subtitle) {
-    const size = Math.round(34 * S); ctx.font = `${size}px ${FONT.mono}`;
-    blocks.push({ font: ctx.font, size, text: subtitle, spacing: size * 0.08, fill: grey, gap: 10 * S, body: false });
+    const size = Math.round((cinema ? 30 : 34) * S); ctx.font = cinema ? `500 ${size}px ${FONT.cinema}` : `${size}px ${FONT.mono}`;
+    blocks.push({ font: ctx.font, size, text: cinema ? subtitle.toUpperCase() : subtitle, spacing: size * (cinema ? 0.35 : 0.08), fill: grey, gap: 10 * S, body: false });
   }
   if (body) {
     const size = Math.round(40 * S); ctx.font = `${size}px ${FONT.mono}`;
@@ -371,7 +415,13 @@ export async function makeCard(W, H, { title = "", subtitle = "", body = "", tit
   for (const b of blocks) {
     ctx.font = b.font;
     const w = textWidth(ctx, b.text, b.spacing), x = (W - w) / 2;
-    drawSpaced(ctx, x, y, b.text, b.fill, b.spacing);
+    if (b.metal) {
+      // engraved metal: a cool-silver vertical gradient with a faint warm glow behind it
+      const gr = ctx.createLinearGradient(0, y, 0, y + b.size);
+      gr.addColorStop(0, "#fbf7ef"); gr.addColorStop(0.48, "#d9d3c8"); gr.addColorStop(0.52, "#a9a296"); gr.addColorStop(1, "#cfc8bb");
+      ctx.save(); ctx.shadowColor = "rgba(255,226,190,0.28)"; ctx.shadowBlur = b.size * 0.35;
+      drawSpaced(ctx, x, y, b.text, gr, b.spacing); ctx.restore();
+    } else drawSpaced(ctx, x, y, b.text, b.fill, b.spacing);
     if (b.body) lastBody = { x: x + w, y, size: b.size };
     y += b.size * 1.25 + b.gap;
   }
@@ -479,6 +529,80 @@ export async function makeTimestampFrames(W, H, style, night, start, seconds) {
 // Filter chains (identical to ghostcut.py, with fallbacks for missing filters)
 // --------------------------------------------------------------------------
 
+// ---- Feature Film look --------------------------------------------------
+// A 2.39:1 "scope" picture inside the frame. Clips fill the scope window (cropped, never letterboxed twice and
+// never on blurred sidebars), the picture is graded through one 3D LUT, and the black bars are drawn last so
+// grain, glow and shake never touch them, the way a real release print is matted.
+export const FILM_GRADES = {
+  horror: { name: "Horror (cold, sickly)", blurb: "Desaturated, cold green-teal shadows, pale highlights. The Conjuring, Insidious." },
+  blockbuster: { name: "Blockbuster (teal & orange)", blurb: "Teal shadows, warm skin, punchy contrast. The big summer-release trailer." },
+  bleach: { name: "Bleach bypass (silver)", blurb: "Hard, silvery, almost monochrome with crushed colour. Gritty thriller." },
+};
+const SCOPE = 2.39;
+function scopeH(W, H) { return Math.min(H, Math.round(W / SCOPE / 2) * 2); }
+function scopeBars(W, H) {
+  const bar = Math.round((H - scopeH(W, H)) / 2);
+  return bar > 0 ? `drawbox=x=0:y=0:w=iw:h=${bar}:c=black:t=fill,drawbox=x=0:y=ih-${bar}:w=iw:h=${bar}:c=black:t=fill` : "null";
+}
+// where the scope window sits on a clip that is taller than it: "auto" frames phone-portrait clips high (heads,
+// faces) and landscape clips a little above centre (doorways, eye lines)
+const FRAME_Y = { top: 0.1, middle: 0.5, bottom: 0.88 };
+function featureFit(W, H, frame = "auto", portrait = false) {
+  const h = scopeH(W, H), y = Math.round((H - h) / 2);
+  const fy = FRAME_Y[frame] ?? (portrait ? 0.2 : 0.42);
+  return `scale=${W}:${h}:force_original_aspect_ratio=increase:flags=lanczos,crop=${W}:${h}:(iw-${W})/2:(ih-${h})*${fy},pad=${W}:${H}:0:${y}:black,setsar=1[base]`;
+}
+// A film-print style grade as a 3D LUT: S-curve with a lifted toe and a soft shoulder (no hard clipping), split
+// toning, and saturation that spares skin tones. Applied with lut3d in one RGB pass.
+export function makeGradeCube(kind = "horror", N = 33) {
+  const G = {
+    horror:      { c: 1.42, lift: 0.018, white: 0.955, sat: 0.62, skin: 0.75, sh: [-0.018, 0.010, 0.022], hi: [-0.006, 0.004, 0.012], mono: 0.0 },
+    blockbuster: { c: 1.30, lift: 0.014, white: 0.965, sat: 0.96, skin: 1.0,  sh: [-0.032, 0.002, 0.042], hi: [0.040, 0.012, -0.030], mono: 0.0 },
+    bleach:      { c: 1.62, lift: 0.010, white: 0.960, sat: 0.55, skin: 0.6,  sh: [-0.004, 0.0, 0.010],  hi: [0.004, 0.004, 0.006],  mono: 0.35 },
+  }[kind] || null;
+  const g = G || { c: 1.42, lift: 0.018, white: 0.955, sat: 0.62, skin: 0.75, sh: [-0.018, 0.010, 0.022], hi: [-0.006, 0.004, 0.012], mono: 0 };
+  const S = x => { x = Math.min(1, Math.max(0, x)); const y = x < 0.5 ? 0.5 * Math.pow(2 * x, g.c) : 1 - 0.5 * Math.pow(2 * (1 - x), g.c); return g.lift + (g.white - g.lift) * y; };
+  const clamp = x => Math.min(1, Math.max(0, x));
+  const lines = [`TITLE "GhostCut ${kind}"`, `LUT_3D_SIZE ${N}`, "DOMAIN_MIN 0 0 0", "DOMAIN_MAX 1 1 1"];
+  for (let bi = 0; bi < N; bi++) for (let gi = 0; gi < N; gi++) for (let ri = 0; ri < N; ri++) {
+    let r = ri / (N - 1), gg = gi / (N - 1), b = bi / (N - 1);
+    const l = 0.2126 * r + 0.7152 * gg + 0.0722 * b;
+    // tone: half luminance-preserving (keeps hue), half per channel (film's slight saturation in the mids)
+    const l2 = S(l), k = l > 1e-4 ? l2 / l : 0;
+    r = 0.5 * clamp(r * k) + 0.5 * S(r); gg = 0.5 * clamp(gg * k) + 0.5 * S(gg); b = 0.5 * clamp(b * k) + 0.5 * S(b);
+    // saturation, with skin (hue ~10-50 degrees) held closer to natural
+    const mx = Math.max(r, gg, b), mn = Math.min(r, gg, b), d = mx - mn;
+    let hue = 0;
+    if (d > 1e-5) { hue = mx === r ? ((gg - b) / d) % 6 : mx === gg ? (b - r) / d + 2 : (r - gg) / d + 4; hue *= 60; if (hue < 0) hue += 360; }
+    const skinW = d > 0.02 ? Math.max(0, 1 - Math.abs(hue - 28) / 24) : 0;
+    const sat = g.sat + (Math.max(g.sat, g.skin) - g.sat) * skinW;
+    const L = 0.2126 * r + 0.7152 * gg + 0.0722 * b;
+    r = L + (r - L) * sat; gg = L + (gg - L) * sat; b = L + (b - L) * sat;
+    if (g.mono) { r += (L - r) * g.mono; gg += (L - gg) * g.mono; b += (L - b) * g.mono; }
+    // split toning: tint the shadows and the highlights separately
+    const ws = Math.pow(1 - L, 2), wh = Math.pow(L, 2);
+    r += g.sh[0] * ws + g.hi[0] * wh; gg += g.sh[1] * ws + g.hi[1] * wh; b += g.sh[2] * ws + g.hi[2] * wh;
+    lines.push(`${clamp(r).toFixed(5)} ${clamp(gg).toFixed(5)} ${clamp(b).toFixed(5)}`);
+  }
+  return lines.join("\n") + "\n";
+}
+async function prepStyle(eng, style, p) {
+  if (STYLES[style]?.feature && eng.has("lut3d")) await eng.ff.writeFile("grade.cube", new TextEncoder().encode(makeGradeCube(p.film_grade)));
+}
+function featureChain(eng, W, H) {
+  const gw = Math.max(16, Math.round(W / 8 / 2) * 2), gh = Math.max(16, Math.round(H / 8 / 2) * 2);
+  const blur = eng.has("gblur") ? `gblur=sigma=${Math.max(2, Math.round(W / 640))}` : "boxblur=3:2";
+  // 24 fps cadence inside the 30 fps file: every film frame held, the way a trailer looks on TV
+  let s = `fps=24,fps=${FPS},format=gbrp,split[fm][fh];` +
+    // halation: only the brightest parts, mostly red, blurred wide at 1/8 size and screened back in
+    `[fh]scale=${gw}:${gh}:flags=bilinear,format=rgb24,lutrgb=r='clip((val-150)*2.6,0,255)':g='clip((val-168)*1.5,0,255)*0.42':b='clip((val-185)*1.2,0,255)*0.18',` +
+    `format=gbrp,${blur},scale=${W}:${H}:flags=bilinear[fhl];[fm][fhl]blend=all_mode=screen:all_opacity=0.55`;
+  s += eng.has("lut3d") ? ",lut3d=file=grade.cube:interp=trilinear,format=yuv420p" : ",format=yuv420p,eq=contrast=1.16:saturation=0.7:gamma=0.95";
+  // soft optical vignette, then grain on luma only (film grain has no colour noise), slightly clumped
+  s += ",vignette=angle=PI/5.5,noise=c0s=11:c0f=t+u";
+  return s;
+}
+
 // These stay in yuv420p wherever possible: in WebAssembly every RGB round-trip (curves, colorbalance)
 // roughly doubles the per-frame cost, so tints are done with chroma LUTs instead.
 function styleVideoChain(eng, style, W, H) {
@@ -496,6 +620,7 @@ function styleVideoChain(eng, style, W, H) {
     return "eq=saturation=1.2:contrast=0.94:brightness=0.02,rgbashift=rh=3:bh=-3,format=yuv420p," + blur(0.7) +
       ",unsharp=3:3:0.6,noise=alls=22:allf=t+u," + jitter + ",vignette=angle=PI/4.6";
   }
+  if (STYLES[style]?.feature) return featureChain(eng, W, H);
   if (style === "cinematic") {
     const bar = Math.round(H * 0.11 / 2) * 2;
     return "eq=contrast=1.14:saturation=0.78:brightness=-0.05:gamma=0.96,lutyuv=u='clip(val+6,0,255)':v='clip(val-5,0,255)'," +
@@ -505,6 +630,7 @@ function styleVideoChain(eng, style, W, H) {
   return "null";
 }
 function styleAudioChain(style) {
+  if (STYLES[style]?.feature) return "highpass=f=30,acompressor=threshold=-24dB:ratio=3:attack=10:release=200:makeup=4dB";
   if (style === "night" || style === "seccam") return "highpass=f=60,lowpass=f=9000,acompressor=threshold=-20dB:ratio=3:attack=20:release=250:makeup=5dB";
   if (style === "vhs") return "highpass=f=100,lowpass=f=6500,acompressor=threshold=-20dB:ratio=2.5:makeup=4dB";
   if (style === "cinematic") return "acompressor=threshold=-22dB:ratio=2.5:makeup=3dB";
@@ -553,6 +679,7 @@ export function clipSpan(clip) {
 export function chooseCanvas(p, clips) {
   if (p.canvas === "portrait") return [1080, 1920];
   if (p.canvas === "landscape") return [1920, 1080];
+  if (STYLES[p.style]?.feature) return [1920, 1080];   // a scope frame only exists on a landscape screen
   const portrait = clips.filter(c => c.meta.portrait).length;
   return portrait > clips.length / 2 ? [1080, 1920] : [1920, 1080];
 }
@@ -581,6 +708,10 @@ export function planNights(p, clips) {
 
 // A sub-bass hit with a little click, 1.4 s. Used on trailer cuts and cards.
 const BOOM = `aevalsrc=exprs='0.9*sin(2*PI*48*t)*exp(-3.5*t)+0.4*sin(2*PI*95*t)*exp(-6*t)+0.25*(random(0)-0.5)*exp(-14*t)':s=${AR}:d=1.4,aformat=channel_layouts=stereo`;
+
+// The trailer "braam": a wall of detuned low brass-like saws that swells in and decays. Feature Film cards use it.
+const BRAAM = `aevalsrc=exprs='(0.30*(2*mod(55*t,1)-1)+0.26*(2*mod(55.35*t,1)-1)+0.20*(2*mod(110.6*t,1)-1)+0.16*(2*mod(82.4*t,1)-1)+0.55*sin(2*PI*41*t))*min(1,t*18)*exp(-0.9*t)':s=${AR}:d=2.8,` +
+  `lowpass=f=700,lowpass=f=1400,acompressor=threshold=-16dB:ratio=4:attack=5:release=300:makeup=6dB,volume=0.9,aformat=channel_layouts=stereo`;
 
 const ENC = ["-c:v", "libx264", "-preset", "superfast", "-crf", "22", "-maxrate", "10M", "-bufsize", "20M", "-pix_fmt", "yuv420p",
   "-r", String(FPS), "-g", String(FPS * 2), "-profile:v", "high", "-level", "4.1", "-c:a", "aac", "-b:a", "160k", "-ar", String(AR), "-ac", "2"];
@@ -633,14 +764,20 @@ export class Renderer {
     await this.eng.ff.writeFile(name + ".png", png);
     const W = this.W, H = this.H;
     let vf;
+    const feature = !!STYLES[this.p.style]?.feature;
     if (plain) vf = "noise=alls=10:allf=t,format=yuv420p";   // a flash word: no fades, on and gone
-    else {
+    else if (feature) {
+      // theatrical card: up out of black, a slow push-in, fine grain, no camcorder flicker
+      const push = slam ? 0.06 : 0.035, fin = slam ? 0.3 : fadeIn;
+      vf = `scale=w='trunc(iw*(1+${push}*t/${f3(duration)})/2)*2':h='trunc(ih*(1+${push}*t/${f3(duration)})/2)*2':eval=frame,crop=${W}:${H},` +
+        `fade=t=in:st=0:d=${fin},fade=t=out:st=${f3(duration - fadeOut)}:d=${fadeOut},format=yuv420p,noise=c0s=9:c0f=t+u`;
+    } else {
       vf = slam
         ? `scale=w='trunc(iw*(1+0.05*t/${f3(duration)})/2)*2':h='trunc(ih*(1+0.05*t/${f3(duration)})/2)*2':eval=frame,crop=${W}:${H},eq=brightness=0.7:enable='lt(t,0.07)',`
         : `fade=t=in:st=0:d=${fadeIn},`;
       vf += `fade=t=out:st=${f3(duration - fadeOut)}:d=${fadeOut},noise=alls=7:allf=t,eq=brightness='0.012*sin(t*31)':eval=frame,format=yuv420p`;
     }
-    const audio = boom ? `${BOOM},apad` : `anullsrc=r=${AR}:cl=stereo`;
+    const audio = boom ? `${feature ? BRAAM : BOOM},apad` : `anullsrc=r=${AR}:cl=stereo`;
     const w = duration * 0.25;
     await this.eng.exec(["-loop", "1", "-framerate", String(FPS), "-threads", "1", "-i", name + ".png", "-f", "lavfi", "-threads", "1", "-i", audio,
       "-t", f3(duration), "-vf", vf, ...ENC, name + ".mp4"], duration, this.job(w, label), label);
@@ -700,7 +837,9 @@ export class Renderer {
       let pre = `[0:v]fps=${FPS},`;
       if (slowmo) pre += `setpts=${f3(slowmo)}*PTS,fps=${FPS},`;
       if (meta.hdr) pre += hdrChain(eng, meta.hdr) + ",";
-      graph.push(pre + fitChain(eng, meta.width, meta.height, W, H));
+      const feature = !!STYLES[style]?.feature;
+      graph.push(pre + (feature ? featureFit(W, H, clip.frame, !!meta.portrait) : fitChain(eng, meta.width, meta.height, W, H)));
+      await prepStyle(eng, style, p);
       let cur = "[base]";
       let fx = styleVideoChain(eng, style, W, H);
       if (opts.bw) fx += ",hue=s=0";
@@ -721,7 +860,19 @@ export class Renderer {
           else if (!(T >= 0.3 && T <= D - 0.4)) T = D < 1.5 ? null : Math.max(0.3, Math.min(D - 0.4, T));
         }
       }
-      if (T != null) { graph.push(`${cur}${jumpScareVideo(T, W, H)}[sc]`); cur = "[sc]"; }
+      if (T != null) {
+        // a photoreal apparition lunges in on the hit (and gets the zoom, shake and strobe with the footage)
+        const face = p.scare_face === undefined ? "real_face" : p.scare_face;
+        const png = face && face !== "none" ? await apparitionPng(face) : null;
+        if (png) {
+          await eng.ff.writeFile("face.png", png);
+          const fh = Math.round((feature ? scopeH(W, H) : Math.min(W, H)) * (face === "real_face" ? 0.98 : 0.7) / 2) * 2;
+          inputs.push("-loop", "1", "-framerate", String(FPS), "-t", "0.5", "-threads", "1", "-i", "face.png");
+          graph.push(`[${nIn}:v]scale=-2:${fh},format=rgba,setpts=PTS-STARTPTS+${f3(T + 0.02)}/TB[gf]`);
+          graph.push(`${cur}[gf]overlay=(W-w)/2:(H-h)/2:eof_action=pass:repeatlast=0:format=auto[gfo]`); cur = "[gfo]"; nIn++;
+        }
+        graph.push(`${cur}${jumpScareVideo(T, W, H)}[sc]`); cur = "[sc]";
+      }
       if (opts.flash) { graph.push(`${cur}eq=brightness=0.75:enable='lt(t,0.07)'[fl]`); cur = "[fl]"; }
 
       if (STYLES[style]?.scanlines) {
@@ -736,6 +887,7 @@ export class Renderer {
         inputs.push("-framerate", "1", "-threads", "1", "-i", "/ts/ts_%04d.png");
         graph.push(`${cur}[${nIn}:v]overlay=0:0:format=yuv420[ts]`); cur = "[ts]"; nIn++;
       }
+      if (feature) { graph.push(`${cur}${scopeBars(W, H)}[bars]`); cur = "[bars]"; }
       const fade = transition === "black" ? (opts.fade || 0.5) : 0;
       const fadeIn = fade && (part.first || preview), fadeOut = fade && (part.last || preview);
       let tail = "";
@@ -766,7 +918,7 @@ export class Renderer {
       await eng.exec([...inputs, "-filter_complex_script", "graph.txt", "-map", "[vout]", "-map", "[aout]", ...enc, "-movflags", "+faststart", name + ".mp4"],
         D, this.job(weight, `Clip ${idx + 1}: ${clip.name}${partLabel}`), `clip ${idx + 1} (${clip.name})${partLabel}`);
       this.finish(weight);
-      for (const f of ["graph.txt", "scan.png"]) try { await eng.ff.deleteFile(f); } catch (_) {}
+      for (const f of ["graph.txt", "scan.png", "face.png", "grade.cube"]) try { await eng.ff.deleteFile(f); } catch (_) {}
       await eng.rmDir("/ts");
       if (preview) return await eng.take(name + ".mp4");
       await this.push(name, D);
@@ -833,7 +985,9 @@ export class Renderer {
       let nIn = 1;
       const graph = [`[0:v]scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H},setsar=1,format=yuv420p[base]`];
       let cur = "[base]";
+      await prepStyle(eng, style, this.p);
       graph.push(`${cur}${styleVideoChain(eng, style, W, H)}[fx]`); cur = "[fx]";
+      if (STYLES[style]?.feature) { graph.push(`${cur}${scopeBars(W, H)}[bars]`); cur = "[bars]"; }
       if (STYLES[style]?.scanlines) {
         await eng.ff.writeFile("lscan.png", await makeScanlines(W, H, 46, 2));
         inputs.push("-threads", "1", "-i", "lscan.png"); graph.push(`${cur}[${nIn}:v]overlay=0:0:format=yuv420[sl]`); cur = "[sl]"; nIn++;
@@ -846,7 +1000,7 @@ export class Renderer {
       graph.push(`${cur}format=yuv420p[vout]`);
       await eng.ff.writeFile("look.txt", graph.join(";\n") + "\n");
       await eng.exec([...inputs, "-filter_complex_script", "look.txt", "-map", "[vout]", "-frames:v", "1", "-q:v", "4", "look.jpg"], 0, null, `look preview (${style})`);
-      for (const f of ["look.txt", "lscan.png", "lts.png", "sample.png"]) try { await eng.ff.deleteFile(f); } catch (_) {}
+      for (const f of ["look.txt", "lscan.png", "lts.png", "sample.png", "grade.cube"]) try { await eng.ff.deleteFile(f); } catch (_) {}
       return await eng.take("look.jpg");
     } finally { if (mounted) await eng.unmount("/probe"); }
   }
@@ -884,7 +1038,7 @@ export class Renderer {
     if (p.title_card) {
       await S("black_open", 0, () => this.renderBlack("black_open", 1.2));
       await S("intro", 2.5, () => this.renderTypewriter("intro", introTextFor(p)));
-      await S("title", 1, async () => this.renderCard("title", await makeCard(this.W, this.H, { title: p.title || "UNTITLED", subtitle: p.subtitle || "", titleKind: this.font, titleScale: (p.title || "").length < 22 ? 0.085 : 0.06 }), 4.0, 1.6, 0.3, "Title card"));
+      await S("title", 1, async () => this.renderCard("title", await makeCard(this.W, this.H, { title: p.title || "UNTITLED", subtitle: p.subtitle || "", titleKind: this.font, titleScale: (p.title || "").length < 22 ? 0.085 : 0.06, plate: this.font === "cinema" ? "dust" : null }), 4.0, 1.6, 0.3, "Title card"));
       await S("black_after_title", 0, () => this.renderBlack("black_after_title", 0.8));
     }
     for (let i = 0; i < this.clips.length; i++) {
@@ -949,12 +1103,14 @@ export class Renderer {
     for (let k = 0; k < tp.items.length; k++) {
       const it = tp.items[k], nm = `tr${String(k).padStart(2, "0")}_${it.type}`;
       if (it.type === "black") { await S(nm, 0, () => this.renderBlack(nm, it.dur)); if (it.quiet) quiet.push({ at, dur: it.dur }); }
-      else if (it.type === "static") await S(nm, 0, () => this.renderStatic(nm, it.dur));
+      // TV static is a camcorder device; a theatrical cut goes to black instead
+      else if (it.type === "static") await S(nm, 0, () => STYLES[p.style]?.feature ? this.renderBlack(nm, it.dur) : this.renderStatic(nm, it.dur));
       else if (it.type === "word") {
         await S(nm, 0, async () => this.renderCard(nm, await makeCard(this.W, this.H, { title: it.text, titleKind: "bold", titleScale: 0.11 }), it.dur, 0, 0, `Word: ${it.text}`, { plain: true }));
       } else if (it.type === "card") {
         await S(nm, it.dur * 0.25, async () => this.renderCard(nm, await makeCard(this.W, this.H, {
           title: it.title || "", subtitle: it.subtitle || "", titleKind: this.font, titleScale: it.big ? ((it.title || "").length < 22 ? 0.085 : 0.06) : 0.05,
+          plate: this.font === "cinema" ? (it.big ? "dust" : "smoke") : null,
         }), it.dur, 0.8, it.fadeOut ?? 0.4, it.big ? "Title card" : `Card: ${it.title}`, { slam: true, boom: o.booms !== false }));
       } else if (it.type === "moment") {
         const clip = this.clips[it.clip], pl = plans[it.clip];

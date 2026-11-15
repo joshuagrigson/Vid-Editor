@@ -5,7 +5,8 @@ import { Output, Mp4OutputFormat, WebMOutputFormat, BufferTarget, StreamTarget, 
 import { layout, duration, outputSize, clipLen, FPS } from "./project.js";
 import { sceneAt } from "./scene.js";
 import { Compositor } from "./compositor.js";
-import { drawOverlays } from "./overlays.js";
+import { drawOverlays, overlayLayer } from "./overlays.js";
+import { loadApparitions, apparitionsIn } from "./apparitions.js";
 import { frames, audioBuffers } from "./media.js";
 import { renderSfx, renderBed } from "./sfx.js";
 
@@ -37,6 +38,7 @@ export async function exportMovie(app, { scale = 1, codecs, fileHandle = null, o
   const lay = layout(project);
   const total = duration(project);
   if (total <= 0) throw new Error("The timeline is empty.");
+  await loadApparitions(apparitionsIn(project));   // every photo spook decoded before the first frame
   const { w, h } = outputSize(project, media, scale);
   const mp4 = codecs.ext === "mp4";
 
@@ -51,6 +53,8 @@ export async function exportMovie(app, { scale = 1, codecs, fileHandle = null, o
   comp.resize(w, h);
   const ov = document.createElement("canvas"); ov.width = w; ov.height = h;
   const ovCtx = ov.getContext("2d");
+  const un = document.createElement("canvas"); un.width = w; un.height = h;
+  const unCtx = un.getContext("2d");
 
   const px = w * h;
   const bitrate = Math.round(Math.min(16e6, Math.max(3e6, px * FPS * 0.16)));
@@ -74,9 +78,11 @@ export async function exportMovie(app, { scale = 1, codecs, fileHandle = null, o
   const emit = async (t, src, sw, sh) => {
     if (signal.cancelled) throw Object.assign(new Error("Export cancelled."), { cancelled: true });
     const sc = sceneAt(project, t, lay);
-    const ovOn = project.overlays.some(o => t >= o.start && t < o.start + o.dur);
-    if (ovOn) drawOverlays(ovCtx, w, h, project, t);
-    comp.render({ src, srcW: sw, srcH: sh, fit: project.fit, xf: sc.xf, t, pre: sc.pre, overlay: ovOn ? ov : null, post: sc.post, transition: sc.transition });
+    const live = project.overlays.filter(o => t >= o.start && t < o.start + o.dur);
+    const unOn = live.some(o => overlayLayer(o) === "under"), ovOn = live.some(o => overlayLayer(o) === "over");
+    if (unOn) drawOverlays(unCtx, w, h, project, t, [], "under");
+    if (ovOn) drawOverlays(ovCtx, w, h, project, t, [], "over");
+    comp.render({ src, srcW: sw, srcH: sh, fit: project.fit, xf: sc.xf, t, under: unOn ? un : null, pre: sc.pre, overlay: ovOn ? ov : null, post: sc.post, transition: sc.transition });
     await vsrc.add(t, 1 / FPS);
     done++;
     if (done % 15 === 0 || done === N) {

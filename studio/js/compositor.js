@@ -73,6 +73,7 @@ export class Compositor {
     this.copy = this.program("__copy", COPY_FRAG);
     this.srcTex = this.texture(true);
     this.ovTex = this.texture(false);
+    this.unTex = this.texture(false);
     this.fbos = [];
     this.prevIdx = 0;
     this.w = 0; this.h = 0;
@@ -166,7 +167,8 @@ export class Compositor {
   bindTex(unit, tex, loc) { const gl = this.gl; gl.activeTexture(gl.TEXTURE0 + unit); gl.bindTexture(gl.TEXTURE_2D, tex); if (loc) gl.uniform1i(loc, unit); }
 
   // frame = { src, srcW, srcH, fit:'blur'|'cover'|'contain', xf:{zoom,x,y,rot}, t,
-  //           pre:[fx], overlay: canvas|null, post:[fx], transition:{type,prog,side}|null }
+  //           under: canvas|null (spooks, before the look), pre:[fx], overlay: canvas|null (text, HUDs),
+  //           post:[fx], transition:{type,prog,side}|null }
   // fx = { type, params, local, dur, seed }
   render(frame) {
     const gl = this.gl;
@@ -207,6 +209,12 @@ export class Compositor {
         [a, b] = [b, a];
       }
     };
+    // spooks go into the footage itself, before the look: they get the grade, grain and bars like real footage
+    if (frame.under) {
+      this.upload(this.unTex, frame.under, true, false);
+      this.draw(this.over, b, u => { this.bindTex(0, a.tex, u.u_tex); this.bindTex(1, this.unTex, u.u_ov); });
+      [a, b] = [b, a];
+    }
     runFx(frame.pre || []);
     if (frame.overlay) {
       this.upload(this.ovTex, frame.overlay, true, false);

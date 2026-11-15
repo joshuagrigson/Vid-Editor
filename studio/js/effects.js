@@ -779,6 +779,31 @@ void main(){
 }`),
 
   // ======================= COLOR =======================
+  fx('feature-grade', 'Feature Film Grade', 'color', 'Theatrical-release colour: a film S-curve with soft highlight roll-off, split-toned shadows and highlights, skin kept natural. Grade 0 = horror (cold), 1 = blockbuster (teal & orange), 2 = bleach bypass.',
+    [A(1), P('grade', 'Grade', 0, 2, 0, 1), P('contrast', 'Contrast', 1, 1.8, 1.4), P('sat', 'Saturation', 0.3, 1.3, 0.8)], `
+float fcurve(float x,float c,float lift,float wht){x=clamp(x,0.,1.);float y=x<.5?.5*pow(2.*x,c):1.-.5*pow(2.*(1.-x),c);return lift+(wht-lift)*y;}
+void main(){
+  vec3 src=srcC();
+  int g=int(floor(u_p.x+.5));
+  float c=u_p.y, lift=.016, wht=.96, sat=u_p.z, skin=1., mono=0.;
+  vec3 sh=vec3(-.018,.01,.022), hi=vec3(-.006,.004,.012);
+  if(g==1){ lift=.014; wht=.965; sat*=1.15; sh=vec3(-.032,.002,.042); hi=vec3(.04,.012,-.03); }
+  if(g==2){ lift=.01; sat*=.7; mono=.35; sh=vec3(-.004,0.,.01); hi=vec3(.004); }
+  if(g==0){ sat*=.8; skin=.75; }
+  float l=luma(src), l2=fcurve(l,c,lift,wht);
+  vec3 t1=clamp(src*(l>1e-4?l2/l:0.),0.,1.);
+  vec3 t2=vec3(fcurve(src.r,c,lift,wht),fcurve(src.g,c,lift,wht),fcurve(src.b,c,lift,wht));
+  vec3 col=.5*t1+.5*t2;
+  vec3 hsv=rgb2hsv(col);
+  float skinW=hsv.y>.08?max(0.,1.-abs(hsv.x*360.-28.)/24.):0.;
+  float s=mix(sat,max(sat,skin),skinW);
+  float L=luma(col);
+  col=mix(vec3(L),col,s);
+  col=mix(col,vec3(L),mono);
+  col+=sh*pow(1.-L,2.)+hi*L*L;
+  emit(src,col);
+}`),
+
   fx('bleach-bypass', 'Bleach Bypass', 'color', 'Gritty, desaturated, high-contrast silver look.',
     [A(0.8)], `
 void main(){
@@ -2048,6 +2073,10 @@ void main(){
 // ---------------------------------------------------------------------------
 const L = (type, params) => ({ type, params });
 export const LOOKS = [
+  { id: 'theatrical-trailer', name: 'Theatrical Trailer', desc: 'Big-screen release finish: blockbuster grade, halation, soft bloom, fine grain and 2.39:1 scope bars.',
+    effects: [L('feature-grade', { amt: 1, grade: 1, contrast: 1.32, sat: 0.85 }), L('halation', { amt: 0.35, thresh: 0.62 }), L('bloom', { amt: 0.18, thresh: 0.72, size: 0.5 }), L('vignette', { amt: 0.25, size: 0.55, soft: 0.8 }), L('film-grain', { amt: 0.28, size: 0.35, color: 0 }), L('cinema-bars', { amt: 1, size: 0.128 })] },
+  { id: 'horror-feature', name: 'Horror Feature', desc: 'The studio horror trailer: cold sickly grade, deep blacks with detail, halation on the lights, grain and scope bars.',
+    effects: [L('feature-grade', { amt: 1, grade: 0, contrast: 1.45, sat: 0.75 }), L('halation', { amt: 0.4, thresh: 0.58 }), L('vignette', { amt: 0.4, size: 0.5, soft: 0.75 }), L('film-grain', { amt: 0.35, size: 0.4, color: 0 }), L('cinema-bars', { amt: 1, size: 0.128 })] },
   { id: 'night-vision-camcorder', name: 'Night Vision Camcorder', desc: 'Green IR camcorder with REC overlay, the classic bedroom-at-3am shot.',
     effects: [L('night-vision', { amt: 0.95, gain: 2, noise: 0.55, bloom: 0.7 }), L('handheld-shake', { amt: 0.2, speed: 0.8, roll: 0.4 }), L('camcorder', { amt: 1, tint: 0 })] },
   { id: 'security-cam', name: 'Security Cam', desc: 'Fisheye CCTV corner camera with timestamp and choppy frames.',

@@ -49,10 +49,12 @@ the one to use.
    doesn't come out washed out.
 2. **Put them in order** by dragging, or with the arrows. Imports are sorted
    by the time the phone recorded them.
-3. **Pick the look.** Night Vision, Security Cam, VHS, Cinematic Dark, or
-   Clean. Any single clip can override the movie look.
+3. **Pick the look.** Night Vision, Security Cam, VHS, Cinematic Dark,
+   Feature Film, or Clean. Any single clip can override the movie look.
 4. **Optional per clip:** trim start/end, and tick *Jump scare at* to drop a
-   zoom-shake-strobe hit with a bass stinger at that second. *Preview* renders
+   zoom-shake-strobe hit with a bass stinger at that second. A photoreal
+   screaming ghost lunges in on the hit (or eyes in the dark, or nothing:
+   *Jump-scare apparition* in the Look panel). *Preview* renders
    six seconds of that clip with the current look so you can tune it.
 5. **Fill in the movie:** title, whose residence the footage was "recovered"
    from, closing text, credits. Choose whether every clip is its own
@@ -101,7 +103,36 @@ Controls in the Trailer panel:
 - **Taglines** (four, in order), a **date line** under the title, and
   **flash words** that strobe for a few frames between montage shots.
 - **Title font** (in the Look panel) applies to every card: Classic serif,
-  Typewriter, or Bold poster.
+  Typewriter, Bold poster, or Theatrical (an engraved Cinzel serif in a silver
+  gradient over a faint smoke or light-beam plate).
+
+## Feature Film look (a theatrical trailer finish)
+
+Pick **Feature Film** and the movie and trailer are finished like a studio
+release instead of camcorder footage:
+
+- **2.39:1 scope frame** on a 1920×1080 canvas. Clips fill the scope window
+  (never on blurred sidebars); phone-portrait clips are framed on their upper
+  part, where faces are. Per clip, *Scope framing* moves it to top, middle or
+  bottom. The black bars are drawn last, so grain, glow and shake never touch
+  them, the way a release print is matted.
+- **Film grade** through one 3D LUT built on the fly: an S-curve with a lifted
+  toe and a soft highlight shoulder, split toning, and saturation that spares
+  skin. Three grades: *Horror* (cold, sickly), *Blockbuster* (teal and
+  orange), *Bleach bypass* (hard silver).
+- **Halation**: the brightest parts bleed a red-orange glow, as on film.
+- **Grain on luma only** and a soft optical vignette.
+- **24 fps cadence** inside the 30 fps file, so motion moves like film.
+- **Cards** rise out of black with a slow push-in, and the trailer's TV-static
+  hits become cuts to black. Card hits are a **braam** (a wall of low detuned
+  brass-like synths) instead of the sub boom.
+- Picking the look switches the title font to Theatrical if it was still on
+  the default.
+
+The art for the photoreal apparitions (`studio/assets/apparitions/`) and the
+card plates (`studio/assets/plates/`) was rendered locally with Z-Image Turbo
+on a home GPU and cut out to transparent PNGs. Cinzel is SIL Open Font License
+(`studio/assets/fonts/OFL-Cinzel.txt`).
 
 ## What it does to the footage
 

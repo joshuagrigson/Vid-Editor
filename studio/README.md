@@ -8,17 +8,23 @@ decoded, composited and encoded on your own computer.
 
 - **Timeline**: video, effects, overlays and sounds tracks. Drag to reorder, drag edges to trim, `S` splits,
   `Delete` removes, `Ctrl+Z` / `Ctrl+Shift+Z` undo and redo, `Space` plays, arrows step a frame.
-- **103 effects** in 10 groups (camera, glitch, distort, colour, supernatural, light, film, blur and motion,
+- **104 effects** in 10 groups (camera, glitch, distort, colour, supernatural, light, film, blur and motion,
   frames, scares). Put them on a clip or drop them on the timeline for a set stretch. Hover any card to see it
   on the current frame.
-- **17 looks**: finished styles built from several effects, for the whole movie or a single clip.
-- **14 one-click scares**: a jump scare, "something behind you", lights out, possession, a ghost walking past
+- **19 looks**: finished styles built from several effects, for the whole movie or a single clip. Two are
+  theatrical: **Theatrical Trailer** and **Horror Feature** use the Feature Film Grade (a film S-curve with
+  highlight roll-off, split toning and skin protection), halation, grain and 2.39:1 scope bars.
+- **16 one-click scares**: a jump scare, "something behind you", lights out, possession, a ghost walking past,
+  something crawling at the camera, a hand reaching for the lens
   and more. Each lands as separate pieces you can move.
 - **16 cuts between clips**: static burst, blood wipe, eye blink, TV off/on, film burn and others.
 - **Text**: 11 styles, from dripping blood to typewriter to trailer slams. **8 camera HUDs**: camcorder,
   night shot, security cam, VHS, ghost hunter, body cam, phone, evidence tape. The clock runs from a date
   you set.
-- **38 spooks**: shadow figures, ghosts, eyes, spiders, handprints, "GET OUT" and more, each with a choice of
+- **49 spooks**, including **11 real apparitions**: photoreal cut-out ghosts and shadow people (the screaming
+  ghost, the girl, the widow, the crawler, the hat man and more) that sit in your footage like they were filmed
+  there. They were rendered on a local GPU and ship as transparent PNGs in `assets/apparitions/`. The rest are
+  drawn: shadow figures, ghosts, eyes, spiders, handprints, "GET OUT" and more, each with a choice of
   movements.
 - **52 sound effects and 10 music beds**, all synthesised in the browser, so nothing is licensed. You can also
   use your own music.

@@ -7,6 +7,7 @@
 <div id="out"></div>
 <script type="module">
 import { STICKERS, STICKER_CATEGORIES, drawSticker, stickerThumb } from '../js/stickers.js';
+import { loadApparitions } from '../js/apparitions.js';
 const logEl = document.getElementById('log'), lines = [];
 const log = (s, cls) => { lines.push(s); const sp = document.createElement('span'); if (cls) sp.className = cls; sp.textContent = s + '\n'; logEl.appendChild(sp); };
 
@@ -19,6 +20,7 @@ function snap(ctx) {
 function diff(a, b) { return Object.keys(a).filter((k) => a[k] !== b[k]).map((k) => `${k}: ${a[k]} -> ${b[k]}`); }
 
 (async () => {
+  await loadApparitions();   // the photo spooks draw nothing until their PNGs are decoded
   let fails = 0, draws = 0;
   const check = (ok, msg) => { if (!ok) { fails++; log('FAIL ' + msg, 'fail'); } return ok; };
   check(STICKERS.length >= 35, `sticker count ${STICKERS.length} >= 35`);
