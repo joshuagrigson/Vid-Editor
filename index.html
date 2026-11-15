@@ -201,6 +201,7 @@
         <option value="real_eyes">Eyes in the dark (photoreal)</option>
         <option value="none">None, just the hit</option>
       </select></label>
+      <label class="check"><input type="checkbox" data-k="finish_words"> Trailer: let people finish their words before a cut</label>
       <label class="check"><input type="checkbox" data-k="scare_shriek"> High-pitched shriek on jump scares</label>
       <label class="check"><input type="checkbox" data-k="title_card"> Opening text + title card</label>
       <label class="check"><input type="checkbox" data-k="night_cards"> “NIGHT #1” cards</label>
@@ -340,7 +341,7 @@
 </div></div>
 
 <script type="module">
-import { Engine, Renderer, STYLES, TRANSITIONS, BEDS, defaultProject, planNights, chooseCanvas, clipSpan, planTrailer, APPARITION_NAMES } from "./app.js";
+import { Engine, Renderer, STYLES, TRANSITIONS, BEDS, defaultProject, planNights, chooseCanvas, clipSpan, planTrailer, APPARITION_NAMES, snapEndToPause } from "./app.js";
 
 const $ = (s, r = document) => r.querySelector(s);
 const fmt = s => { s = Math.round(s); return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0"); };
@@ -746,6 +747,24 @@ async function startRender({ resumeMap = null, record = null, mode = "movie" } =
       // a hand-arranged storyboard replaces the automatic plan
       rec.trailer = materializeBoard(ready);
       if (!rec.trailer.items.length) throw new Error("The storyboard is empty. Add some pieces, or go back to the automatic trailer.");
+      await DB.set("kv", "render", rec);
+    }
+    if (mode === "trailer" && !record && state.finish_words !== false) {
+      // let people finish their words: run each shot on to the next pause in the talking
+      const plans = planNights(state, ready), moments = rec.trailer.items.filter(it => it.type === "moment");
+      for (let k = 0; k < moments.length; k++) {
+        const it = moments[k], c = ready[it.clip];
+        if (!c?.meta.has_audio) continue;
+        progress(0.02 * k / moments.length, `Finding where the talking pauses (shot ${k + 1} of ${moments.length})…`);
+        const sm = it.slowmo && it.slowmo > 1 ? it.slowmo : 1, srcLen = it.dur / sm;   // footage seconds the shot uses
+        const room = Math.min(2.2, plans[it.clip].duration - (it.start + srcLen));
+        if (room < 0.1) continue;
+        const from = Math.max(0, it.start + srcLen - 5);   // a few seconds back, to learn how loud the voices and the room are
+        const env = await engine._analyze(c.file, plans[it.clip].start + from, it.start + srcLen + room - from, true);
+        const end = snapEndToPause(env, it.start + srcLen - from, room) + from;
+        if (end > it.start + srcLen + 0.04) it.dur = (end - it.start) * sm;
+      }
+      rec.trailer.total = rec.trailer.items.reduce((a, it) => a + it.dur, 0);
       await DB.set("kv", "render", rec);
     }
     const r = new Renderer(engine, state, ready, progress, {

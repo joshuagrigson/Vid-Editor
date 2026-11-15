@@ -38,6 +38,7 @@ export function defaultProject() {
     bed: "drone",
     card_font: "cinema",            // serif | mono | bold | cinema
     film_grade: "horror",           // Feature Film look: horror | blockbuster | bleach
+    finish_words: true,             // trailer shots run on to the next pause so nobody is cut off mid-word
     scare_shriek: true,             // the rising high-pitched shriek on jump scares (off = low hit only)
     scare_face: "real_face",        // photoreal apparition flashed in on jump scares: real_face | real_eyes | none
     // trailer
@@ -269,14 +270,15 @@ export class Engine {
   // Loudness per half-second of a clip (audio only, so it's quick): [{t, db}], t relative to `start`.
   // Used to find the screams and bangs for the trailer.
   analyze(file, start, dur) { return this.run(() => this._analyze(file, start, dur)); }
-  async _analyze(file, start, dur) {   // unqueued: for use from inside a running job
+  // voice = true: the speech band only, in 0.05 s steps (for finding pauses between words)
+  async _analyze(file, start, dur, voice = false) {   // unqueued: for use from inside a running job
     {
       const safe = safeName(file.name);
       await this.mountFiles([new File([file], safe)], "/probe");
       this.log = [];
       try {
         await this.ff.exec(["-hide_banner", "-loglevel", "info", "-nostats", "-ss", f3(start), "-t", f3(dur), "-i", `/probe/${safe}`, "-vn", "-threads", "1",
-          "-af", `aresample=8000,aformat=channel_layouts=mono,asetnsamples=n=4000,astats=metadata=1:reset=1,ametadata=mode=print:key=lavfi.astats.Overall.RMS_level`,
+          "-af", `aresample=8000,aformat=channel_layouts=mono,${voice ? "highpass=f=250,lowpass=f=3400,asetnsamples=n=400" : "asetnsamples=n=4000"},astats=metadata=1:reset=1,ametadata=mode=print:key=lavfi.astats.Overall.RMS_level`,
           "-f", "null", "-"]);
       } finally { await this.unmount("/probe"); }
       const out = []; let t = null;
@@ -945,6 +947,7 @@ export class Renderer {
       if (opts.boom) { a += `[a2];${BOOM}[bm];[a2][bm]amix=inputs=2:duration=first:normalize=0,alimiter=limit=0.97`; }
       if (fadeIn) a += `,afade=t=in:st=0:d=${fade}`;
       if (fadeOut) a += `,afade=t=out:st=${f3(D - fade)}:d=${fade}`;
+      else if (opts.tailFade) a += `,afade=t=out:st=${f3(Math.max(0, D - 0.12))}:d=0.12`;   // trailer cuts never clip a voice with a click
       a += `,apad=whole_dur=${f3(D + 2)},atrim=duration=${f3(D)},asetpts=PTS-STARTPTS[aout]`;
       graph.push(a);
 
@@ -1158,7 +1161,7 @@ export class Renderer {
         if (it.riser) riser = riser ? { at: riser.at, dur: at + it.dur - riser.at } : { at, dur: it.dur };
         await S(nm, it.dur * (clip.meta.hdr ? 3 : 1), () => this.renderClip(it.clip, clip, pl, part, {
           name: nm, transition: it.transition || "cut", fade: 0.35, flash: !!it.flash, boom: !!it.boom, shake: !!it.shake,
-          slowmo: it.slowmo || 0, negate: !!it.negate, bw: !!o.bw,
+          slowmo: it.slowmo || 0, negate: !!it.negate, bw: !!o.bw, tailFade: true,
           scareT: it.scare ? Math.min(it.dur - 0.4, it.scare) : null, label: ` (trailer moment ${k + 1} of ${tp.items.length})`,
         }));
       }
@@ -1176,6 +1179,29 @@ export class Renderer {
 // --------------------------------------------------------------------------
 // Trailer planning: pick the loudest / most sudden moments and lay them out as a trailer.
 // --------------------------------------------------------------------------
+
+// Where to end a shot so nobody is cut off mid-word. env = [{t, db}] voice-band levels in 0.05 s steps, t relative
+// to the start of the analysed window; end = the planned end inside that window. Returns the new end: the middle
+// of the first real pause (0.15 s or more of quiet) at or after the planned end, looking up to maxExtend further.
+export function snapEndToPause(env, end, maxExtend = 2.2) {
+  if (env.length < 8) return end;
+  const dbs = env.map(w => w.db).sort((a, b) => a - b);
+  const floor = dbs[Math.floor(dbs.length * 0.1)], loud = dbs[Math.floor(dbs.length * 0.95)];
+  if (loud - floor < 10) return end;                      // no speech to speak of: leave the cut alone
+  const quiet = Math.max(floor + 10, loud - 25);          // a real pause: far under the voices, near the room tone
+  const step = env[1].t - env[0].t;
+  let run = 0;
+  for (const w of env) {
+    if (w.t < end - 0.1) continue;
+    if (w.t > end + maxExtend) break;
+    if (w.db <= quiet) { run++; if (run * step >= 0.25) return Math.max(end, w.t - run * step / 2 + step); }
+    else run = 0;
+  }
+  // no clean pause in reach: take the quietest instant after the planned end
+  let best = null;
+  for (const w of env) if (w.t >= end && w.t <= end + maxExtend && (!best || w.db < best.db)) best = w;
+  return best ? best.t : end;
+}
 
 export const TRAILER_LENGTHS = { 45: { setup: 2, esc: 4, montage: 6 }, 60: { setup: 3, esc: 5, montage: 8 }, 90: { setup: 4, esc: 7, montage: 12 } };
 export const DEFAULT_TAGLINES = "THIS HALLOWEEN\nSOMETHING IS IN THE HOUSE\nNO ONE WILL BELIEVE THEM\nCOMING SOON";
