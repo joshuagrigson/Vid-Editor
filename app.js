@@ -30,13 +30,13 @@ export function defaultProject() {
   return {
     title: "PARANORMAL ACTIVITY", subtitle: "", family: "the Grigson", intro_text: "",
     outro_text: "The whereabouts of the family remain unknown.", credits: "",
-    style: "night", transition: "static", canvas: "auto", title_card: true, night_cards: true,
+    style: "feature", transition: "black", canvas: "auto", title_card: true, night_cards: true,
     nights_mode: "per_clip", timestamps: true, drone: 0.55, end_card: true, start_date: "",
     output_name: "", seed: Math.floor(Math.random() * 999999) + 1,
     trailer_length: "60", trailer_taglines: "",
     // sound bed (movie and trailer): drone | heartbeat | wind | musicbox | hum | none | custom
     bed: "drone",
-    card_font: "serif",             // serif | mono | bold | cinema
+    card_font: "cinema",            // serif | mono | bold | cinema
     film_grade: "horror",           // Feature Film look: horror | blockbuster | bleach
     scare_face: "real_face",        // photoreal apparition flashed in on jump scares: real_face | real_eyes | none
     // trailer

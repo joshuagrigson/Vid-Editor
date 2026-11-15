@@ -674,8 +674,8 @@ def default_project() -> dict:
         "intro_text": "",              # blank = auto-generated from family
         "outro_text": "The whereabouts of the family remain unknown.",
         "credits": "",                 # one line each
-        "style": "night",
-        "transition": "static",
+        "style": "feature",
+        "transition": "black",
         "canvas": "auto",              # auto | landscape | portrait
         "title_card": True,
         "night_cards": True,
@@ -688,7 +688,7 @@ def default_project() -> dict:
         "trailer_length": 60,
         "trailer_taglines": "",
         "bed": "drone",                # drone | heartbeat | wind | musicbox | hum | none | custom
-        "card_font": "serif",          # serif | mono | bold | cinema
+        "card_font": "cinema",         # serif | mono | bold | cinema
         "film_grade": "horror",        # Feature Film look: horror | blockbuster | bleach
         "scare_face": "real_face",     # photoreal apparition on jump scares: real_face | real_eyes | none
         "trailer_pace": "classic",     # slow | classic | relentless

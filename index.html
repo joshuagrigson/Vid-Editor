@@ -84,6 +84,14 @@
   .drop.over, .drop:hover { border-color: var(--accent2); color: var(--text); }
   .drop b { color: var(--text); font-size: 17px; display: block; margin-bottom: 4px; }
   .hint { color: var(--muted); font-size: 12px; margin-top: 8px; }
+  .promo { margin-bottom: 14px; border-color: #3a2a1e; background: linear-gradient(180deg, #17120e, var(--panel)); }
+  .promo .lead { font-size: 15px; line-height: 1.45; }
+  .promo .lead b { font-family: Cinzel, "Times New Roman", serif; letter-spacing: .14em; font-size: 17px; color: #efe6d6; margin-right: 6px; }
+  .promo .tag { display: inline-block; font-size: 11px; font-weight: 700; letter-spacing: .12em; color: #fff; background: var(--accent); border-radius: 4px; padding: 2px 7px; margin-right: 8px; vertical-align: 2px; }
+  .promo img { width: 100%; display: block; border-radius: 8px; margin: 12px 0; border: 1px solid #2a2622; }
+  .promo .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .promo .on { color: #8fd18f; font-weight: 600; }
+  .promo video { width: 100%; margin-top: 12px; border-radius: 8px; background: #000; }
   code { font-family: var(--mono); font-size: 12px; background: #0f0f14; padding: 1px 5px; border-radius: 4px; }
   #clips { display: grid; gap: 10px; margin-top: 14px; }
   .clip { display: grid; grid-template-columns: 150px 1fr auto; gap: 14px; padding: 12px; border: 1px solid var(--line);
@@ -238,6 +246,18 @@
   </aside>
 
   <section>
+    <div class="panel promo" id="promo">
+      <div class="lead"><span class="tag">NEW</span><b>Feature Film</b> Your phone clips finished like a studio horror trailer:
+        a 2.39:1 cinema frame, a film colour grade, glowing highlights, real grain, engraved title cards with a trailer
+        "braam", and a photoreal ghost that lunges in on every jump scare.</div>
+      <img src="studio/assets/demo/feature-preview.jpg" alt="A phone clip next to the same clip with the Feature Film look, and a theatrical title card">
+      <div class="row">
+        <button class="primary" id="useFeature">Use the Feature Film look</button>
+        <span class="on" id="featureOn" hidden>✓ Feature Film look is on. Drop clips in and press Create trailer.</span>
+        <button id="watchSample">▶ Watch a sample trailer</button>
+      </div>
+      <video id="sampleVid" controls playsinline preload="none" hidden></video>
+    </div>
     <div class="panel">
       <h2>The footage</h2>
       <div class="drop" id="drop">
@@ -355,6 +375,7 @@ function fillSettings() {
   });
   $("#droneVal").textContent = Math.round((state.drone || 0) * 100) + "%";
   $("#gradeRow").style.display = STYLES[state.style]?.feature ? "" : "none";
+  $("#useFeature").hidden = !!STYLES[state.style]?.feature; $("#featureOn").hidden = !STYLES[state.style]?.feature;
   document.querySelectorAll(".look:not(.bed)").forEach(l => l.classList.toggle("on", l.dataset.v === state.style));
   document.querySelectorAll(".look.bed").forEach(l => l.classList.toggle("on", l.dataset.v === (state.bed || "drone")));
   showSound();
@@ -709,6 +730,16 @@ async function startRender({ resumeMap = null, record = null, mode = "movie" } =
 }
 $("#render").addEventListener("click", () => startRender({ mode: "movie" }));
 $("#trailer").addEventListener("click", () => startRender({ mode: "trailer" }));
+$("#useFeature").addEventListener("click", () => {
+  const radio = document.querySelector('.look[data-v="feature"] input');
+  if (radio) { radio.checked = true; radio.dispatchEvent(new Event("change")); }
+  document.querySelector('.look[data-v="feature"]')?.scrollIntoView({ behavior: "smooth", block: "center" });
+});
+$("#watchSample").addEventListener("click", () => {
+  const v = $("#sampleVid");
+  if (!v.src) v.src = "studio/assets/demo/feature-sample.mp4";
+  v.hidden = false; v.play().catch(() => {});
+});
 $("#pvClose").addEventListener("click", () => { $("#modal").classList.remove("on"); $("#pv").pause(); if ($("#pv").src) URL.revokeObjectURL($("#pv").src); $("#pv").removeAttribute("src"); $("#pv").load(); });
 $("#modal").addEventListener("click", e => { if (e.target === e.currentTarget) $("#pvClose").click(); });
 $("#reset").addEventListener("click", async () => {
