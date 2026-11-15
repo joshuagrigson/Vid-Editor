@@ -201,6 +201,7 @@
         <option value="real_eyes">Eyes in the dark (photoreal)</option>
         <option value="none">None, just the hit</option>
       </select></label>
+      <label class="check"><input type="checkbox" data-k="scare_shriek"> High-pitched shriek on jump scares</label>
       <label class="check"><input type="checkbox" data-k="title_card"> Opening text + title card</label>
       <label class="check"><input type="checkbox" data-k="night_cards"> “NIGHT #1” cards</label>
       <label class="check"><input type="checkbox" data-k="timestamps"> Camcorder clock / REC overlay</label>
@@ -862,7 +863,7 @@ function renderBoardEdit() {
     h = (it.useTitle ? `<span class="hint" style="margin:0">Uses the movie title: <b>${esc(state.title || "")}</b></span>` : `<label>Text<input type="text" data-sb="title" value="${esc(it.title || "")}"></label>`) +
       `<label>Small line under it<input type="text" data-sb="subtitle" value="${esc(it.subtitle || "")}"></label>` + num("dur", "Length (s)", 0.1, 0.5) + ck("big", "Big (title size)");
   } else if (it.type === "word") h = `<label>Word<input type="text" data-sb="text" value="${esc(it.text || "")}"></label>` + num("dur", "Length (s)", 0.05, 0.1);
-  else if (it.type === "ghost") h = `<label>Apparition<select data-sb="ghost">${Object.entries(APPARITION_NAMES).map(([k, v]) => `<option value="${k}" ${k === it.ghost ? "selected" : ""}>${v}</option>`).join("")}</select></label>` + num("dur", "Length (s)", 0.1, 0.4) + ck("boom", "Stinger sound");
+  else if (it.type === "ghost") h = `<label>Apparition<select data-sb="ghost">${Object.entries(APPARITION_NAMES).map(([k, v]) => `<option value="${k}" ${k === it.ghost ? "selected" : ""}>${v}</option>`).join("")}</select></label>` + num("dur", "Length (s)", 0.1, 0.4) + ck("boom", "Low boom");
   else h = num("dur", "Length (s)", 0.05, 0.1) + (it.type === "black" ? ck("quiet", "Silence (duck the music)") : "");
   box.innerHTML = h;
   box.querySelectorAll("[data-sb]").forEach(el => el.addEventListener("change", () => {

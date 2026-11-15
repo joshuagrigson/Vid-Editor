@@ -38,6 +38,7 @@ export function defaultProject() {
     bed: "drone",
     card_font: "cinema",            // serif | mono | bold | cinema
     film_grade: "horror",           // Feature Film look: horror | blockbuster | bleach
+    scare_shriek: true,             // the rising high-pitched shriek on jump scares (off = low hit only)
     scare_face: "real_face",        // photoreal apparition flashed in on jump scares: real_face | real_eyes | none
     // trailer
     trailer_pace: "classic",        // slow | classic | relentless
@@ -665,8 +666,9 @@ function jumpScareVideo(T, W, H) {
     `negate=enable='between(t,${f3(T)},${f3(T + 0.06)})+between(t,${f3(T + 0.13)},${f3(T + 0.17)})',` +
     `eq=brightness=0.45:enable='between(t,${f3(T + 0.06)},${f3(T + 0.10)})',noise=alls=70:allf=t+u:enable='between(t,${f3(T)},${f3(T + 0.75)})'`;
 }
-function jumpScareAudioSource(T, label) {
-  const sting = "0.9*sin(2*PI*52*t)*exp(-2.2*t)+0.45*sin(2*PI*(650+2400*t)*t)*exp(-5*t)+0.35*(random(0)-0.5)*exp(-9*t)";
+function jumpScareAudioSource(T, label, shriek = true) {
+  // sub hit + (optional) rising high-pitched shriek + a short noise crack
+  const sting = "0.9*sin(2*PI*52*t)*exp(-2.2*t)" + (shriek ? "+0.45*sin(2*PI*(650+2400*t)*t)*exp(-5*t)" : "+0.5*sin(2*PI*78*t)*exp(-4*t)") + "+0.35*(random(0)-0.5)*exp(-9*t)";
   return `aevalsrc=exprs='${sting}':s=${AR}:d=3,aformat=channel_layouts=stereo,adelay=${Math.round(T * 1000)}:all=1${label}`;
 }
 
@@ -808,7 +810,7 @@ export class Renderer {
       `scale=w='trunc(iw*(1+0.12*t/${f3(duration)})/2)*2':h='trunc(ih*(1+0.12*t/${f3(duration)})/2)*2':eval=frame,crop=${W}:${H},` +
       `eq=brightness='0.02*sin(t*37)':eval=frame,vignette=angle=PI/4,noise=alls=12:allf=t,` +
       `fade=t=in:st=0:d=0.1,fade=t=out:st=${f3(Math.max(0, duration - 0.15))}:d=0.15,format=yuv420p,trim=duration=${f3(duration)},setpts=PTS-STARTPTS[vout];` +
-      (sting ? jumpScareAudioSource(0.02, "[st]") + `;[st]atrim=duration=${f3(duration)},apad=whole_dur=${f3(duration)}[aout]`
+      (sting ? `${BOOM}[st]` + `;[st]atrim=duration=${f3(duration)},apad=whole_dur=${f3(duration)}[aout]`
              : `[2:a]atrim=duration=${f3(duration)}[aout]`);
     await eng.ff.writeFile("ghost.txt", graph + "\n");
     const w = duration * 0.3;
@@ -937,7 +939,7 @@ export class Renderer {
       if (!meta.has_audio) { inputs.push("-f", "lavfi", "-i", `anullsrc=r=${AR}:cl=stereo`); asrc = `[${nIn}:a]`; nIn++; }
       let a = `${asrc}aresample=${AR},aformat=sample_fmts=fltp:channel_layouts=stereo,${slowmo ? `atempo=${f3(1 / slowmo)},` : ""}${styleAudioChain(style)}`;
       if (T != null) {
-        a += `,volume=0.12:enable='between(t,${f3(Math.max(0, T - 0.8))},${f3(T - 0.02)})'[a1];` + jumpScareAudioSource(T, "[sting]") + ";" +
+        a += `,volume=0.12:enable='between(t,${f3(Math.max(0, T - 0.8))},${f3(T - 0.02)})'[a1];` + jumpScareAudioSource(T, "[sting]", p.scare_shriek !== false) + ";" +
              "[a1][sting]amix=inputs=2:duration=first:normalize=0,alimiter=limit=0.97";
       }
       if (opts.boom) { a += `[a2];${BOOM}[bm];[a2][bm]amix=inputs=2:duration=first:normalize=0,alimiter=limit=0.97`; }
