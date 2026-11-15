@@ -398,8 +398,12 @@ export async function makeCard(W, H, { title = "", subtitle = "", body = "", tit
   const white = "rgb(235,235,235)", grey = "rgb(160,160,160)";
   const blocks = []; // {font, size, text, spacing, fill, gap, body}
   if (title) {
-    const size = Math.round(H * titleScale); ctx.font = fontCss(titleKind, size);
-    const sp = size * (titleKind === "bold" ? 0.08 : cinema ? 0.24 : 0.18);
+    let size = Math.round(H * titleScale), sp;
+    for (;;) {   // a single long word can't wrap: shrink the type until every line fits (tall phone frames)
+      ctx.font = fontCss(titleKind, size); sp = size * (titleKind === "bold" ? 0.08 : cinema ? 0.24 : 0.18);
+      if (size <= 12 || wrapText(ctx, title.toUpperCase(), W * 0.86, sp).every(ln => textWidth(ctx, ln, sp) <= W * 0.9)) break;
+      size = Math.round(size * 0.92);
+    }
     for (const ln of wrapText(ctx, title.toUpperCase(), W * 0.86, sp)) blocks.push({ font: ctx.font, size, text: ln, spacing: sp, fill: white, gap: 30 * S, body: false, metal: cinema });
   }
   if (subtitle) {

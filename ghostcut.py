@@ -214,8 +214,13 @@ def make_card(path: str, W: int, H: int, title: str = "", subtitle: str = "", bo
     grey = tuple(int(v * dim) for v in (160, 160, 160))
     blocks = []  # (font, text, spacing, fill, gap_after, is_body)
     if title:
-        f = load_font(title_kind, int(H * title_scale))
-        sp = f.size * (0.08 if title_kind == "bold" else 0.24 if cinema else 0.18)
+        size = int(H * title_scale)
+        while True:   # a single long word can't wrap: shrink the type until every line fits (tall phone frames)
+            f = load_font(title_kind, size)
+            sp = f.size * (0.08 if title_kind == "bold" else 0.24 if cinema else 0.18)
+            if size <= 12 or all(text_width(f, ln, sp) <= W * 0.9 for ln in wrap_text(title.upper(), f, W * 0.86, sp)):
+                break
+            size = int(size * 0.92)
         for ln in wrap_text(title.upper(), f, W * 0.86, sp):
             blocks.append((f, ln, sp, "metal" if cinema else white, int(30 * S), False))
     if subtitle:
