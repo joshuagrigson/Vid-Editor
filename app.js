@@ -851,6 +851,48 @@ export class Renderer {
     this.finish(w); await this.push(name, duration);
   }
 
+  // The apparition standing in the user's own footage: one frame of a clip is held as the scene, the figure is
+  // set into it dark, soft and part see-through, and the whole picture then moves together (slow push-in and a
+  // hand-held drift) under that clip's look, so the figure belongs to the room instead of sitting on top of it.
+  async renderGhostInScene(name, it) {
+    const W = this.W, H = this.H, eng = this.eng, duration = it.dur;
+    const clip = this.clips[it.plateClip], plan = planNights(this.p, this.clips)[it.plateClip];
+    const png = await apparitionPng(it.ghost);
+    if (!png) return this.renderBlack(name, duration);
+    const style = clip.effect && clip.effect !== "style" ? clip.effect : this.p.style;
+    const feature = !!STYLES[style]?.feature;
+    const safe = safeName(clip.file.name);
+    const w = duration * 0.3;
+    await eng.mountFiles([new File([clip.file], safe)], "/in");
+    try {
+      const at = plan.start + Math.max(0, Math.min(+it.plateT || 0, plan.duration - 0.1));
+      await eng.exec(["-ss", f3(at), "-i", `/in/${safe}`, "-frames:v", "1", "-vf",
+        `scale=${W}:${H}:force_original_aspect_ratio=increase:flags=lanczos,crop=${W}:${H},setsar=1`, "plate.png"], 0, null, "scene frame");
+    } finally { await eng.unmount("/in"); }
+    await eng.ff.writeFile("ghost.png", png);
+    const size = Math.min(0.95, Math.max(0.15, +it.size || 0.55)), px = Math.min(0.95, Math.max(0.05, it.px ?? 0.3));
+    const op = Math.min(1, Math.max(0.1, +it.opacity || 0.5));
+    const fh = Math.round(H * size / 2) * 2;
+    const soft = eng.has("boxblur") ? ",boxblur=lr=4:lp=1:cr=2:cp=1:ar=4:ap=1" : "";
+    await prepStyle(eng, style, this.p);
+    const graph = `[1:v]scale=-2:${fh}:flags=lanczos,format=rgba,colorchannelmixer=aa=${f3(op)},fade=t=in:st=0.2:d=0.5:alpha=1,` +
+      `format=yuva420p,lutyuv=y=val*0.5${soft}[g];` +
+      `[0:v][g]overlay=x=W*${f3(px)}-w/2:y=H*0.97-h:format=auto,` +
+      `scale=w='trunc(iw*(1.06+0.05*t/${f3(duration)})/2)*2':h='trunc(ih*(1.06+0.05*t/${f3(duration)})/2)*2':eval=frame,` +
+      `crop=${W}:${H}:x='(iw-${W})/2+10*sin(t*2.3)+5*sin(t*5.1)':y='(ih-${H})/2+8*sin(t*1.7+1)+4*sin(t*6.3)',setsar=1,format=yuv420p[sc];` +
+      `[sc]${styleVideoChain(eng, style, W, H)}[fx];[fx]${feature ? scopeBars(W, H) + "," : ""}` +
+      `fade=t=in:st=0:d=0.12,fade=t=out:st=${f3(Math.max(0, duration - 0.15))}:d=0.15,format=yuv420p,trim=duration=${f3(duration)},setpts=PTS-STARTPTS[vout];` +
+      (it.boom ? `${BOOM}[st];[st]atrim=duration=${f3(duration)},apad=whole_dur=${f3(duration)}[aout]` : `[2:a]atrim=duration=${f3(duration)}[aout]`);
+    await eng.ff.writeFile("ghost.txt", graph + "\n");
+    await eng.exec(["-loop", "1", "-framerate", String(FPS), "-t", f3(duration), "-threads", "1", "-i", "plate.png",
+      "-loop", "1", "-framerate", String(FPS), "-t", f3(duration), "-threads", "1", "-i", "ghost.png",
+      "-f", "lavfi", "-threads", "1", "-i", `anullsrc=r=${AR}:cl=stereo`,
+      "-filter_complex_script", "ghost.txt", "-map", "[vout]", "-map", "[aout]", "-t", f3(duration), ...ENC, name + ".mp4"],
+      duration, this.job(w, "Apparition in the scene"), "apparition");
+    for (const f of ["ghost.png", "ghost.txt", "plate.png", "grade.cube"]) try { await eng.ff.deleteFile(f); } catch (_) {}
+    this.finish(w); await this.push(name, duration);
+  }
+
   async renderTypewriter(name, text) {
     this.progress(this.doneWork / this.totalWork, "Drawing the opening text…");
     const frames = await makeTypewriterFrames(this.W, this.H, text);
@@ -1184,7 +1226,8 @@ export class Renderer {
       if (it.type === "black") { await S(nm, 0, () => this.renderBlack(nm, it.dur)); if (it.quiet) quiet.push({ at, dur: it.dur }); }
       // TV static is a camcorder device; a theatrical cut goes to black instead
       else if (it.type === "static") await S(nm, 0, () => STYLES[p.style]?.feature ? this.renderBlack(nm, it.dur) : this.renderStatic(nm, it.dur));
-      else if (it.type === "ghost") await S(nm, it.dur * 0.3, () => this.renderGhost(nm, it.ghost, it.dur, it.boom !== false));
+      else if (it.type === "ghost") await S(nm, it.dur * 0.3, () => it.plateClip != null && this.clips[it.plateClip]
+        ? this.renderGhostInScene(nm, it) : this.renderGhost(nm, it.ghost, it.dur, it.boom !== false));
       else if (it.type === "word") {
         await S(nm, 0, async () => this.renderCard(nm, await makeCard(this.W, this.H, { title: it.text, titleKind: "bold", titleScale: 0.11 }), it.dur, 0, 0, `Word: ${it.text}`, { plain: true }));
       } else if (it.type === "card") {
