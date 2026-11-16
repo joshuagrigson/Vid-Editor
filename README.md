@@ -117,6 +117,16 @@ photoreal apparitions as its own shot, or any clip (from the palette or straight
 from the clip list). While the storyboard has pieces, *Create trailer* renders
 exactly that; *Back to the automatic trailer* clears it.
 
+## Recorded sounds
+
+Besides the synthesized beds, the Sound panel has eight **recorded beds** (dark
+ambient, pulses, drones, an empty hallway). The trailer storyboard has eight
+**cut sounds** (deep impacts, low drums, crashes, a distorted swell): click one to
+hear it, drag it onto a tile (or pick *Sound on this cut* in the tile editor) and
+it plays as that piece starts. All are low-pitched on purpose. The files are in
+`studio/assets/sounds/`; `CREDITS.txt` there lists each source: Nihilex (CC0) and
+ObsydianX (CC BY 4.0).
+
 ## Feature Film look (a theatrical trailer finish)
 
 Pick **Feature Film** and the movie and trailer are finished like a studio

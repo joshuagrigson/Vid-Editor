@@ -1,0 +1,18 @@
+Sounds bundled with GhostCut
+
+bed_misery, bed_wait      "Dark Ambient Soundscape" (Misery Loves Company, Those Who Wait)
+bed_darkamb, bed_pulse,
+bed_creepy                "Free Audio Asset Collection" (Dark Ambient, Dark Pulsating Ambient, Lofi Creepy Theme)
+bed_hallway               "Underground Facility Ambient Pack" (Ambience Hallway)
+hit_crash1, hit_crash2,
+hit_longcrash, hit_distort  "Free Audio Asset Collection" (Crash fx 01, Crash fx 03, Long Crash fx 01, Long Distorted fx)
+  by Nihilex (SamiH), https://nihil-existentia.itch.io/free-audio-asset-collection
+  License: CC0 1.0 (public domain dedication), as stated on the pack's page.
+
+bed_drone, bed_sub        Horror SFX Volume 1, Drones 1 (drone 03, drone 13)
+hit_impact1, hit_impact2,
+hit_drum1, hit_drum2      Horror SFX Volume 1, stingers (impact 01, impact 02, drum 1 01, drum 1 05)
+  by ObsydianX, https://obsydianx.itch.io/horror-sfx-volume-1
+  License: Creative Commons Attribution 4.0, https://creativecommons.org/licenses/by/4.0/
+
+Changes made to all files: trimmed (beds to 100 s, hits to 5 s), level adjusted, faded, re-encoded to AAC.

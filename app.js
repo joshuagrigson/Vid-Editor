@@ -58,8 +58,34 @@ export const BEDS = {
   musicbox: { name: "Music Box", blurb: "A detuned lullaby echoing down a hallway." },
   hum: { name: "Electrical Hum", blurb: "Mains buzz, tape hiss and the odd crackle. Security-camera cold." },
   none: { name: "Silence", blurb: "No bed. Just the footage, the hits and the stingers." },
+  // recorded beds (studio/assets/sounds, see CREDITS.txt there)
+  bed_misery: { name: "Misery (dark ambient)", blurb: "Recorded. A deep, slow dark-ambient piece, almost all low end.", file: "bed_misery.m4a", by: "Nihilex, CC0" },
+  bed_wait: { name: "Those Who Wait", blurb: "Recorded. Brooding dark ambient that feels like something is coming.", file: "bed_wait.m4a", by: "Nihilex, CC0" },
+  bed_darkamb: { name: "Dark Ambient", blurb: "Recorded. A long, quiet, uneasy room tone.", file: "bed_darkamb.m4a", by: "Nihilex, CC0" },
+  bed_pulse: { name: "Dark Pulse", blurb: "Recorded. A heavy pulsing ambient bed with weight.", file: "bed_pulse.m4a", by: "Nihilex, CC0" },
+  bed_creepy: { name: "Creepy Lo-fi Theme", blurb: "Recorded. A short creepy lo-fi tune that loops.", file: "bed_creepy.m4a", by: "Nihilex, CC0" },
+  bed_hallway: { name: "Empty Hallway", blurb: "Recorded. The air of an underground corridor.", file: "bed_hallway.m4a", by: "Nihilex, CC0" },
+  bed_drone: { name: "Horror Drone", blurb: "Recorded. A low unsettling drone.", file: "bed_drone.m4a", by: "ObsydianX, CC BY 4.0" },
+  bed_sub: { name: "Sub Drone", blurb: "Recorded. Pure sub-bass dread you feel more than hear.", file: "bed_sub.m4a", by: "ObsydianX, CC BY 4.0" },
   custom: { name: "Your own sound", blurb: "Upload an mp3, m4a or wav. Looped or trimmed to fit, faded in and out." },
 };
+// Recorded cut sounds for the trailer storyboard: one can be put on the start of any piece.
+export const HITS = {
+  hit_impact1: { name: "Deep impact", file: "hit_impact1.m4a", by: "ObsydianX, CC BY 4.0" },
+  hit_impact2: { name: "Deep impact 2", file: "hit_impact2.m4a", by: "ObsydianX, CC BY 4.0" },
+  hit_drum1: { name: "Low drum", file: "hit_drum1.m4a", by: "ObsydianX, CC BY 4.0" },
+  hit_drum2: { name: "Low drum 2", file: "hit_drum2.m4a", by: "ObsydianX, CC BY 4.0" },
+  hit_crash1: { name: "Crash", file: "hit_crash1.m4a", by: "Nihilex, CC0" },
+  hit_crash2: { name: "Crash 2", file: "hit_crash2.m4a", by: "Nihilex, CC0" },
+  hit_longcrash: { name: "Long crash", file: "hit_longcrash.m4a", by: "Nihilex, CC0" },
+  hit_distort: { name: "Distorted swell", file: "hit_distort.m4a", by: "Nihilex, CC0" },
+};
+export const soundUrl = file => new URL(`studio/assets/sounds/${file}`, document.baseURI).href;
+const soundCache = new Map();
+async function soundFile(file) {
+  if (!soundCache.has(file)) soundCache.set(file, fetch(soundUrl(file)).then(r => { if (!r.ok) throw new Error("Could not load the sound " + file); return r.blob(); }));
+  return new File([await soundCache.get(file)], file);
+}
 export const PACES = {
   slow: { name: "Slow burn", setup: 3.0, esc: 1.9, mont: 1.0, count: 0.8 },
   classic: { name: "Classic", setup: 2.4, esc: 1.5, mont: 0.8, count: 1.0 },
@@ -72,7 +98,7 @@ export function bedGraph(kind, total, gain, soundIn = null) {
   const g = Math.max(0, gain);
   if (kind === "none" || g <= 0) return null;
   const tail = `,afade=t=in:st=0:d=3,afade=t=out:st=${f3(Math.max(0, total - 4))}:d=4`;
-  if (kind === "custom") {
+  if (kind === "custom" || BEDS[kind]?.file) {
     if (soundIn == null) return null;
     return [`[${soundIn}:a]aresample=${AR},aformat=sample_fmts=fltp:channel_layouts=stereo,atrim=duration=${f3(total)},volume=${f3(1.0 * g)}${tail}[bed]`];
   }
@@ -974,8 +1000,11 @@ export class Renderer {
     const files = this.segments.map(s => new File([s.blob], s.name, { type: "video/mp4" }));
     await this.eng.mountFiles(files, "/segs");
     const kind = this.p.bed || "drone";
-    const sound = kind === "custom" && opts.sound ? opts.sound : null;
+    const sound = BEDS[kind]?.file ? await soundFile(BEDS[kind].file) : kind === "custom" && opts.sound ? opts.sound : null;
     if (sound) await this.eng.mountFiles([new File([sound], "bed" + extOf(sound.name))], "/snd");
+    const hits = (opts.hits || []).filter(h => HITS[h.id] && h.at < total);
+    const hitFiles = [...new Set(hits.map(h => HITS[h.id].file))];
+    if (hitFiles.length) await this.eng.mountFiles(await Promise.all(hitFiles.map(soundFile)), "/sfx");
     try {
       let list = "ffconcat version 1.0\n";
       for (const s of this.segments) list += `file '/segs/${s.name}'\nduration ${f3(s.duration)}\n`;
@@ -997,6 +1026,13 @@ export class Renderer {
         graph.push(`aevalsrc=exprs='(0.28*sin(2*PI*(70+900*pow(t/${Dr},2))*t)+0.22*(random(0)-0.5)+0.18*sin(2*PI*(35+300*pow(t/${Dr},2))*t))*(0.15+0.85*pow(t/${Dr},1.5))':s=${AR}:d=${Dr},aformat=channel_layouts=stereo,adelay=${Math.round(opts.riser.at * 1000)}:all=1[riser]`);
         graph.push(`${acur}[riser]amix=inputs=2:duration=first:normalize=0[amixr]`); acur = "[amixr]";
       }
+      if (hits.length) {
+        // recorded cut sounds, each dropped in at the start of its piece
+        const first = 1 + (sound ? 1 : 0);
+        hits.forEach(h => inputs.push("-threads", "1", "-i", "/sfx/" + HITS[h.id].file));   // one input per use
+        hits.forEach((h, i) => graph.push(`[${first + i}:a]aresample=${AR},aformat=sample_fmts=fltp:channel_layouts=stereo,volume=0.85,adelay=${Math.round(h.at * 1000)}:all=1[hit${i}]`));
+        graph.push(`${acur}${hits.map((h, i) => `[hit${i}]`).join("")}amix=inputs=${hits.length + 1}:duration=first:normalize=0[amixh]`); acur = "[amixh]";
+      }
       graph.push(`${acur}alimiter=limit=0.95,afade=t=out:st=${f3(Math.max(0, total - 1.5))}:d=1.5[aout]`);
       await this.eng.ff.writeFile("final.txt", graph.join(";\n") + "\n");
       const w = total * 0.08;
@@ -1006,7 +1042,7 @@ export class Renderer {
       this.finish(w);
       for (const f of ["concat.txt", "final.txt"]) try { await this.eng.ff.deleteFile(f); } catch (_) {}
       return await this.eng.take(outName);
-    } finally { await this.eng.unmount("/segs"); if (sound) await this.eng.unmount("/snd"); }
+    } finally { await this.eng.unmount("/segs"); if (sound) await this.eng.unmount("/snd"); if (hitFiles.length) await this.eng.unmount("/sfx"); }
   }
 
   // One small frame with a look applied, for the look picker. file = null → the synthetic hallway.
@@ -1141,9 +1177,10 @@ export class Renderer {
     this.totalWork = this.estimateTrailerWork(tp); this.segments = [];
     const S = (name, weight, fn) => this.seg(name, weight, fn);
     let at = 0, riser = null, quiet = [];
-    const o = tp.opts || {};
+    const o = tp.opts || {}, hits = [];
     for (let k = 0; k < tp.items.length; k++) {
       const it = tp.items[k], nm = `tr${String(k).padStart(2, "0")}_${it.type}`;
+      if (it.sfx) hits.push({ at, id: it.sfx });
       if (it.type === "black") { await S(nm, 0, () => this.renderBlack(nm, it.dur)); if (it.quiet) quiet.push({ at, dur: it.dur }); }
       // TV static is a camcorder device; a theatrical cut goes to black instead
       else if (it.type === "static") await S(nm, 0, () => STYLES[p.style]?.feature ? this.renderBlack(nm, it.dur) : this.renderStatic(nm, it.dur));
@@ -1168,7 +1205,7 @@ export class Renderer {
       at += it.dur;
     }
     let blob;
-    try { blob = await this.renderFinal("trailer.mp4", { riser, quiet, droneGain: 1.35, sound: this.sound }); }
+    try { blob = await this.renderFinal("trailer.mp4", { riser, quiet, hits, droneGain: 1.35, sound: this.sound }); }
     catch (e) { if (e.stalled && this.onStall) await this.onStall(e); throw e; }
     this.segments = [];
     this.progress(1, "Done");
