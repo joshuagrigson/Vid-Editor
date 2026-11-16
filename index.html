@@ -760,7 +760,7 @@ async function startRender({ resumeMap = null, record = null, mode = "movie" } =
       const plans = planNights(state, ready), moments = rec.trailer.items.filter(it => it.type === "moment");
       for (let k = 0; k < moments.length; k++) {
         const it = moments[k], c = ready[it.clip];
-        if (!c?.meta.has_audio) continue;
+        if (!c?.meta.has_audio || it.mute) continue;   // a muted shot has no words to finish
         progress(0.02 * k / moments.length, `Finding where the talking pauses (shot ${k + 1} of ${moments.length})…`);
         const sm = it.slowmo && it.slowmo > 1 ? it.slowmo : 1, srcLen = it.dur / sm;   // footage seconds the shot uses
         const room = Math.min(2.2, plans[it.clip].duration - (it.start + srcLen));
@@ -820,7 +820,7 @@ function sbInsert(piece, at = sbItems().length) {
 }
 function sbTileHtml(it) {
   const c = it.type === "moment" ? clips.find(x => x.id === it.clipId) : null;
-  if (it.type === "moment") return `<div class="pic" style="background-image:url('${c?.thumb || ""}')">${c ? "" : "clip removed"}</div><div class="cap">${esc(c?.name || "?")} @${(+it.start).toFixed(1)}s · ${(+it.dur).toFixed(1)}s${it.scare ? " 😱" : ""}</div>`;
+  if (it.type === "moment") return `<div class="pic" style="background-image:url('${c?.thumb || ""}')">${c ? "" : "clip removed"}</div><div class="cap">${esc(c?.name || "?")} @${(+it.start).toFixed(1)}s · ${(+it.dur).toFixed(1)}s${it.scare ? " 😱" : ""}${it.mute ? " 🔇" : ""}</div>`;
   if (it.type === "ghost") return `<div class="pic ghost" style="background-image:url('studio/assets/apparitions/${it.ghost}.png')"></div><div class="cap">${esc(APPARITION_NAMES[it.ghost] || "Apparition")} · ${(+it.dur).toFixed(1)}s</div>`;
   if (it.type === "card") return `<div class="pic">${esc(it.useTitle ? (state.title || "TITLE") : it.title || "")}</div><div class="cap">${it.big ? "Title" : "Tagline"} · ${(+it.dur).toFixed(1)}s</div>`;
   if (it.type === "word") return `<div class="pic" style="font-family:Impact,sans-serif;font-size:16px">${esc(it.text || "")}</div><div class="cap">Flash word · ${(+it.dur).toFixed(2)}s</div>`;
@@ -894,7 +894,7 @@ function renderBoardEdit() {
     const ready = clips.filter(c => !c.pending);
     h = `<label>Clip<select data-sb="clipId">${ready.map((c, i) => `<option value="${c.id}" ${c.id === it.clipId ? "selected" : ""}>${i + 1}. ${esc(c.name)}</option>`).join("")}</select></label>` +
       num("start", "Starts at (s)", 0.1, 0) + num("dur", "Length (s)", 0.1, 0.3) +
-      ck("scare", "Jump scare") + ck("boom", "Boom on the cut") + ck("flash", "White flash") + ck("shake", "Shake") + ck("slowmo", "Slow motion") + ck("riser", "Rising shriek") + ck("fadeBlack", "Fade through black", it.transition === "black");
+      ck("scare", "Jump scare") + ck("boom", "Boom on the cut") + ck("flash", "White flash") + ck("shake", "Shake") + ck("slowmo", "Slow motion") + ck("riser", "Rising shriek") + ck("fadeBlack", "Fade through black", it.transition === "black") + ck("mute", "Mute this clip's own sound");
   } else if (it.type === "card") {
     h = (it.useTitle ? `<span class="hint" style="margin:0">Uses the movie title: <b>${esc(state.title || "")}</b></span>` : `<label>Text<input type="text" data-sb="title" value="${esc(it.title || "")}"></label>`) +
       `<label>Small line under it<input type="text" data-sb="subtitle" value="${esc(it.subtitle || "")}"></label>` + num("dur", "Length (s)", 0.1, 0.5) + ck("big", "Big (title size)");

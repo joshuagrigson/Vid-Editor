@@ -964,7 +964,7 @@ export class Renderer {
       graph.push(cur + tail);
 
       let asrc = "[0:a]";
-      if (!meta.has_audio) { inputs.push("-f", "lavfi", "-i", `anullsrc=r=${AR}:cl=stereo`); asrc = `[${nIn}:a]`; nIn++; }
+      if (!meta.has_audio || opts.mute) { inputs.push("-f", "lavfi", "-i", `anullsrc=r=${AR}:cl=stereo`); asrc = `[${nIn}:a]`; nIn++; }
       let a = `${asrc}aresample=${AR},aformat=sample_fmts=fltp:channel_layouts=stereo,${slowmo ? `atempo=${f3(1 / slowmo)},` : ""}${styleAudioChain(style)}`;
       if (T != null) {
         a += `,volume=0.12:enable='between(t,${f3(Math.max(0, T - 0.8))},${f3(T - 0.02)})'[a1];` + jumpScareAudioSource(T, "[sting]", p.scare_shriek !== false) + ";" +
@@ -1198,7 +1198,7 @@ export class Renderer {
         if (it.riser) riser = riser ? { at: riser.at, dur: at + it.dur - riser.at } : { at, dur: it.dur };
         await S(nm, it.dur * (clip.meta.hdr ? 3 : 1), () => this.renderClip(it.clip, clip, pl, part, {
           name: nm, transition: it.transition || "cut", fade: 0.35, flash: !!it.flash, boom: !!it.boom, shake: !!it.shake,
-          slowmo: it.slowmo || 0, negate: !!it.negate, bw: !!o.bw, tailFade: true,
+          slowmo: it.slowmo || 0, negate: !!it.negate, bw: !!o.bw, tailFade: true, mute: !!it.mute,
           scareT: it.scare ? Math.min(it.dur - 0.4, it.scare) : null, label: ` (trailer moment ${k + 1} of ${tp.items.length})`,
         }));
       }
